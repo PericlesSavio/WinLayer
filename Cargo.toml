@@ -2,6 +2,7 @@
 name = "winlayer"
 version = "0.0.1"
 edition = "2021"
+license = "GPL-3.0-only"
 description = "Compatibility layer that runs old Windows games on Linux"
 
 [dependencies]

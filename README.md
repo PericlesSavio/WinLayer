@@ -106,6 +106,8 @@ expects. DLLs shipped with a game, such as Miles or Smacker, are loaded from dis
 The target is `i586-unknown-linux-musl` because game code must run in a 32-bit process, and because code built by old
 compilers does not keep the 16-byte stack alignment that SSE code in Rust relies on.
 
-## Author
+## License
 
-Péricles S.
+GPL-3.0-only. See [LICENSE](LICENSE).
+
+Copyright (C) 2026 Péricles S.
