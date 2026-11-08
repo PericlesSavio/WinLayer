@@ -1,6 +1,6 @@
 # Compatibility
 
-Windows games tested with winlayer 0.0.1. Last updated: 2026-11-08.
+Windows games tested with winlayer 0.0.2. Last updated: 2026-11-08.
 
 ## Summary
 
