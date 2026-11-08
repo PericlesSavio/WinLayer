@@ -106,6 +106,11 @@ fn main() -> ExitCode {
                 serve_port = args[1].parse().ok();
                 args.drain(..2);
             }
+            "--fullscreen" => {
+                x11::set_fullscreen();
+                want_x11 = true;
+                args.remove(0);
+            }
             "--x11" => {
                 want_x11 = true;
                 args.remove(0);

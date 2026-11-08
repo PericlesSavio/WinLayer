@@ -53,6 +53,7 @@ winlayer --x11 /path/to/game/GAME.EXE
 | Option | Description |
 |---|---|
 | `--x11` | Native window (the default without `--shot` or `--serve`) |
+| `--fullscreen` | Native window in fullscreen with the mouse confined to it; Ctrl+F10 releases and confines it again |
 | `--serve PORT [--bind ADDR]` | Viewer at `http://127.0.0.1:PORT/`; only listens on 127.0.0.1 by default |
 | `--shot FILE.png` | Headless mode with a virtual clock; saves a PNG and exits |
 | `--events SCRIPT` | Scripted input, e.g. `"m 120 140; d 0; wait 1; u 0; kd 13; ku 13"` |

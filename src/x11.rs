@@ -89,6 +89,22 @@ impl Conn {
     }
 
     /// Envia uma requisição: opcode, byte de dados, corpo (preenchido até 4 bytes).
+    /// GrabPointer: prende o cursor à janela (a resposta chega junto com os eventos).
+    fn grab_pointer(&mut self, win: u32) -> std::io::Result<()> {
+        let mut b = Vec::with_capacity(20);
+        b.extend_from_slice(&win.to_le_bytes());
+        b.extend_from_slice(&(4u16 | 8 | 64).to_le_bytes()); // botões e movimento
+        b.extend_from_slice(&[1, 1]); // modos assíncronos
+        b.extend_from_slice(&win.to_le_bytes()); // confine_to
+        b.extend_from_slice(&0u32.to_le_bytes()); // mantém o cursor
+        b.extend_from_slice(&0u32.to_le_bytes()); // CurrentTime
+        self.req(26, 1, &b) // owner_events
+    }
+
+    fn ungrab_pointer(&mut self) -> std::io::Result<()> {
+        self.req(27, 0, &0u32.to_le_bytes())
+    }
+
     fn req(&mut self, opcode: u8, data: u8, body: &[u8]) -> std::io::Result<()> {
         let total = 4 + pad4(body.len());
         let mut v = Vec::with_capacity(total);
@@ -331,6 +347,17 @@ struct Ev {
     state: u16,
 }
 
+/// `--fullscreen`: tela cheia com o mouse preso à janela. O modo janela continua sendo o padrão.
+static FULLSCREEN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+pub fn set_fullscreen() {
+    FULLSCREEN.store(true, std::sync::atomic::Ordering::Relaxed);
+}
+
+fn fullscreen() -> bool {
+    FULLSCREEN.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 pub fn start() -> Result<(), String> {
     let (mut c, setup) = Conn::connect()?;
     let (w, h) = (user32::desktop_w(), user32::desktop_h());
@@ -356,7 +383,9 @@ pub fn start() -> Result<(), String> {
     b.extend_from_slice(&(0x2u32 | 0x800).to_le_bytes()); // BackPixel | EventMask
     b.extend_from_slice(&setup.black.to_le_bytes());
     // KeyPress|KeyRelease|ButtonPress|ButtonRelease|PointerMotion|Exposure|StructureNotify
-    b.extend_from_slice(&(1u32 | 2 | 4 | 8 | 64 | 0x8000 | 0x20000).to_le_bytes());
+    // FocusChange só em tela cheia: o mouse é solto quando a janela perde o foco.
+    let focus = if fullscreen() { 0x20_0000u32 } else { 0 };
+    b.extend_from_slice(&(1u32 | 2 | 4 | 8 | 64 | 0x8000 | 0x20000 | focus).to_le_bytes());
     c.req(1, 0, &b).map_err(|e| e.to_string())?;
     // CreateGC sem atributos.
     let mut g = Vec::new();
@@ -385,6 +414,12 @@ pub fn start() -> Result<(), String> {
     let syms: Vec<u32> = r[32..].chunks_exact(4).map(|q| u32le(q, 0)).collect();
     let keymap = Keymap { per: per.max(1), min: setup.min_kc, syms };
 
+    if fullscreen() {
+        // Antes de mapear, basta gravar o estado (EWMH); o gerenciador de janelas aplica ao mostrar.
+        let state = c.intern_atom("_NET_WM_STATE")?;
+        let full = c.intern_atom("_NET_WM_STATE_FULLSCREEN")?;
+        c.change_property(win, state, 4, 32, &full.to_le_bytes()).map_err(|e| e.to_string())?;
+    }
     c.req(8, 0, &win.to_le_bytes()).map_err(|e| e.to_string())?; // MapWindow
     let depth = setup.depth;
     c.s.set_read_timeout(Some(Duration::from_millis(8))).ok();
@@ -416,7 +451,15 @@ fn run(mut c: Conn, keymap: Keymap, win: u32, gc: u32, depth: u8, wm_delete: u32
     let (mut wr_i, mut wr_t, mut cfg_events, mut frames, mut stat_t) = (0u32, Instant::now(), 0u32, 0u32, Instant::now());
     let stress = std::env::var_os("WINLAYER_X11_STRESS").is_some(); // teste: muda o tamanho da tela o tempo todo
     let (mut stress_i, mut stress_t) = (0usize, Instant::now());
+    // Mouse preso (só com --fullscreen). A janela só pode ser presa depois de visível, por isso as novas tentativas.
+    let mut grab_wanted = fullscreen();
+    let (mut focused, mut grabbed, mut grab_pending, mut grab_t, mut grab_logged) = (true, false, false, Instant::now(), false);
     loop {
+        if grab_wanted && focused && !grabbed && !grab_pending && grab_t.elapsed() >= Duration::from_millis(200) {
+            grab_t = Instant::now();
+            c.grab_pointer(win).map_err(|e| e.to_string())?;
+            grab_pending = true;
+        }
         if stress && stress_t.elapsed() >= Duration::from_millis(60) {
             stress_i += 1;
             stress_t = Instant::now();
@@ -457,6 +500,23 @@ fn run(mut c: Conn, keymap: Keymap, win: u32, gc: u32, depth: u8, wm_delete: u32
             match code {
                 0 => eprintln!("[winlayer] X11: erro código {} opcode {}", ev[1], ev[10]),
                 2..=6 => evs.push(Ev { code, detail: ev[1], time: u32le(ev, 4), x: u16le(ev, 24) as i16, y: u16le(ev, 26) as i16, state: u16le(ev, 28) }),
+                1 if grab_pending => {
+                    grab_pending = false;
+                    grabbed = ev[1] == 0;
+                    if grabbed && !grab_logged {
+                        grab_logged = true;
+                        eprintln!("[winlayer] mouse preso à janela (Ctrl+F10 solta e prende de novo)");
+                    }
+                }
+                9 => focused = true, // FocusIn
+                10 => {
+                    // FocusOut: sem isso o Alt+Tab deixaria o cursor preso em outro programa
+                    focused = false;
+                    if grabbed {
+                        c.ungrab_pointer().map_err(|e| e.to_string())?;
+                        grabbed = false;
+                    }
+                }
                 12 => dirty = true, // Expose
                 22 => {
                     // ConfigureNotify: novo tamanho da janela
@@ -465,7 +525,10 @@ fn run(mut c: Conn, keymap: Keymap, win: u32, gc: u32, depth: u8, wm_delete: u32
                     if nw > 0 && nh > 0 && (nw, nh) != (cur_w, cur_h) {
                         (cur_w, cur_h) = (nw, nh);
                         // o jogo ganha espaço de verdade: a tela virtual passa a ter o tamanho da janela
-                        user32::request_screen(nw.max(640), nh.max(480));
+                        // (em tela cheia, a imagem só é ampliada)
+                        if !fullscreen() {
+                            user32::request_screen(nw.max(640), nh.max(480));
+                        }
                         dirty = true;
                     }
                 }
@@ -500,6 +563,15 @@ fn run(mut c: Conn, keymap: Keymap, win: u32, gc: u32, depth: u8, wm_delete: u32
                     push_move(&mut lines, e.x, e.y);
                     lines.push(format!("{} {}", if e.code == 4 { "d" } else { "u" }, e.detail - 1));
                 }
+                2 if fullscreen() && e.state & 4 != 0 && keymap.sym(e.detail, 0) == 0xffc7 => {
+                    // Ctrl+F10: solta ou prende o mouse
+                    grab_wanted = !grab_wanted;
+                    if !grab_wanted && grabbed {
+                        c.ungrab_pointer().map_err(|e| e.to_string())?;
+                        grabbed = false;
+                    }
+                }
+                3 if fullscreen() && e.state & 4 != 0 && keymap.sym(e.detail, 0) == 0xffc7 => {}
                 2 if keymap.sym(e.detail, 0) == 0xffc9 => save_print(), // F12: captura de tela
                 3 if keymap.sym(e.detail, 0) == 0xffc9 => {}
                 2 => {
