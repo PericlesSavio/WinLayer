@@ -5,7 +5,7 @@ Windows: game code runs directly on the CPU, and calls to the Windows API are ha
 
 It ships as a single statically linked 32-bit executable of about 2.4 MB, with no libraries to install.
 
-**Status:** early development. It covers what the tested games use, not Windows as a whole. See
+**Version 0.0.1**, early development. It covers what the tested games use, not Windows as a whole. See
 [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md) for per-game results.
 
 ## Features
@@ -33,6 +33,8 @@ cargo build --release
 The binary is written to `target/i586-unknown-linux-musl/release/winlayer`.
 
 ## Requirements
+
+**Only tested on Fedora 43 (x86-64).** Other distributions should work, but have not been tried.
 
 - Linux on x86 or x86-64, with a kernel that can run 32-bit programs
 - An X server or XWayland; the X authorization cookie is read from `~/.Xauthority`

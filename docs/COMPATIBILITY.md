@@ -1,21 +1,29 @@
 # Compatibility
 
-Windows games tested with winlayer. Last updated: 2026-11-08.
+Windows games tested with winlayer 0.0.1. Last updated: 2026-11-08.
+
+## Summary
+
+| Status | Meaning | Games |
+|---|---|---:|
+| **Doesn't run** | Crashes or exits before showing the game | 1 |
+| **Unplayable** | Starts, but something essential prevents playing | 2 |
+| **Playable** | Can be played, but features are missing or there are visible defects | 3 |
+| **Perfect** | No known defects, after extended testing | 0 |
+| **Total** | | **6** |
+
+No game is rated Perfect yet: more testing is needed.
+
+## Games
 
 | Game | Year | Platform | Status | Graphics | Sound | Input |
 |---|---|---|---|---|---|---|
-| [Revenant](#revenant) (GOG 1.22l) | 1999 | Win32, DirectX 6 | Playable | DirectDraw 640x480x16, game's own 3D renderer | See notes | DirectInput and window messages |
-| [Nox](#nox) | 2000 | Win32, DirectX | Playable | DirectDraw 640x480x16 | DirectSound | DirectInput |
+| [Revenant](#revenant) (GOG 1.22l) | 1999 | Win32, DirectX 6 | Playable: no CD music, no multiplayer | DirectDraw 640x480x16, game's own 3D renderer | See notes | DirectInput and window messages |
+| [Nox](#nox) | 2000 | Win32, DirectX | Playable: no multiplayer | DirectDraw 640x480x16 | DirectSound | DirectInput |
 | [Hexplore](#hexplore) | 1998 | Win32, DirectX 5 | Playable | DirectDraw 640x480x8 | DirectSound | Mouse and keyboard |
-| [3D Pinball: Space Cadet](#3d-pinball-space-cadet) | 1995 | Win32, GDI | Partial (unplayable) | GDI, 8-bit palette | Not verified | Keyboard |
-| [Civilization for Windows](#civilization-for-windows) | 1992 | Win16 (NE) | Partial (unplayable) | GDI | `sndPlaySound` | Mouse and keyboard |
-| [Planescape: Torment Enhanced Edition](#planescape-torment-enhanced-edition) (GOG 3.1.4.0) | 2017 | Win32, OpenGL | Does not start (native version exists) | — | — | — |
-
-## Status levels
-
-- **Playable:** starts, reaches gameplay and responds to input.
-- **Partial:** runs, but has known problems or missing APIs.
-- **Does not start:** stops before creating a window.
+| [3D Pinball: Space Cadet](#3d-pinball-space-cadet) | 1995 | Win32, GDI | Unplayable | GDI, 8-bit palette | Not verified | Keyboard |
+| [Civilization for Windows](#civilization-for-windows) | 1992 | Win16 (NE) | Unplayable: units do not move | GDI | `sndPlaySound` | Mouse and keyboard |
+| [Planescape: Torment Enhanced Edition](#planescape-torment-enhanced-edition) (GOG 3.1.4.0) | 2017 | Win32, OpenGL | Doesn't run: native version available | — | — | — |
 
 ## Revenant
 
@@ -42,7 +50,7 @@ Windows games tested with winlayer. Last updated: 2026-11-08.
 - **Command**, from the game folder: `winlayer --x11 hexplore.exe`
 - **Tested:** logo, Smacker intro videos, menu, new game and map with mouse and keyboard in capture mode; X11 window.
 - **Tip:** Esc skips the intro.
-- **Limitations:** none known.
+- **Limitations:** none known, but only the start of a game has been tested.
 
 ## 3D Pinball: Space Cadet
 
