@@ -1,6 +1,6 @@
-//! Janela nativa X11 falando o protocolo X direto pelo socket Unix (só std, sem Xlib/XCB).
-//! Mostra o "desktop" do winlayer numa janela de tamanho fixo e converte mouse/teclado do X
-//! para o protocolo de entrada de `win32/user32/input.rs` (`m`, `d`, `u`, `kd`, `ku`, `ch`).
+//! Native X11 window speaking the X protocol directly over the Unix socket (std only, no Xlib/XCB).
+//! Shows the winlayer "desktop" in a fixed-size window and converts X mouse/keyboard input
+//! to the input protocol of `win32/user32/input.rs` (`m`, `d`, `u`, `kd`, `ku`, `ch`).
 
 use crate::win32::user32;
 use std::io::{Read, Write};
@@ -24,7 +24,7 @@ fn u32le(b: &[u8], o: usize) -> u32 {
     u32::from_le_bytes([b[o], b[o + 1], b[o + 2], b[o + 3]])
 }
 
-/// Lê (nome, dados) do cookie de autenticação do ~/.Xauthority para o display `num`.
+/// Reads (name, data) of the authentication cookie from ~/.Xauthority for display `num`.
 fn read_xauth(num: &str) -> Option<(Vec<u8>, Vec<u8>)> {
     let path = std::env::var_os("XAUTHORITY").map(std::path::PathBuf::from).or_else(|| std::env::var_os("HOME").map(|h| std::path::Path::new(&h).join(".Xauthority")))?;
     let d = std::fs::read(path).ok()?;
@@ -59,10 +59,10 @@ impl Conn {
         let after = display.rsplit(':').next().unwrap_or("0");
         let num = after.split('.').next().unwrap_or("0");
         if !(display.starts_with(':') || display.starts_with("unix:")) {
-            return Err(format!("DISPLAY={display}: só display local (:N) é suportado"));
+            return Err(format!("DISPLAY={display}: only a local display (:N) is supported"));
         }
         let path = format!("/tmp/.X11-unix/X{num}");
-        let mut s = UnixStream::connect(&path).map_err(|e| format!("não consegui conectar em {path}: {e}"))?;
+        let mut s = UnixStream::connect(&path).map_err(|e| format!("could not connect to {path}: {e}"))?;
         s.set_read_timeout(Some(Duration::from_secs(5))).ok();
         let (aname, adata) = read_xauth(num).unwrap_or_default();
         let mut req = vec![b'l', 0, 11, 0, 0, 0];
@@ -75,28 +75,28 @@ impl Conn {
         req.resize(req.len() + pad4(adata.len()) - adata.len(), 0);
         s.write_all(&req).map_err(|e| e.to_string())?;
         let mut head = [0u8; 8];
-        s.read_exact(&mut head).map_err(|e| format!("sem resposta do servidor X: {e}"))?;
+        s.read_exact(&mut head).map_err(|e| format!("no response from the X server: {e}"))?;
         let extra = u16le(&head, 6) as usize * 4;
         let mut a = vec![0u8; extra];
         s.read_exact(&mut a).map_err(|e| e.to_string())?;
         if head[0] != 1 {
             let n = (head[1] as usize).min(a.len());
-            return Err(format!("servidor X recusou a conexão: {}", String::from_utf8_lossy(&a[..n])));
+            return Err(format!("X server refused the connection: {}", String::from_utf8_lossy(&a[..n])));
         }
         let setup = Setup::parse(&a)?;
         let max = u16le(&a, 18) as usize * 4;
         Ok((Conn { s, max_req_bytes: max }, setup))
     }
 
-    /// Envia uma requisição: opcode, byte de dados, corpo (preenchido até 4 bytes).
-    /// GrabPointer: prende o cursor à janela (a resposta chega junto com os eventos).
+    /// Sends a request: opcode, data byte, body (padded to 4 bytes).
+    /// GrabPointer: confines the cursor to the window (the reply arrives along with the events).
     fn grab_pointer(&mut self, win: u32) -> std::io::Result<()> {
         let mut b = Vec::with_capacity(20);
         b.extend_from_slice(&win.to_le_bytes());
-        b.extend_from_slice(&(4u16 | 8 | 64).to_le_bytes()); // botões e movimento
-        b.extend_from_slice(&[1, 1]); // modos assíncronos
+        b.extend_from_slice(&(4u16 | 8 | 64).to_le_bytes()); // buttons and motion
+        b.extend_from_slice(&[1, 1]); // asynchronous modes
         b.extend_from_slice(&win.to_le_bytes()); // confine_to
-        b.extend_from_slice(&0u32.to_le_bytes()); // mantém o cursor
+        b.extend_from_slice(&0u32.to_le_bytes()); // keep the cursor
         b.extend_from_slice(&0u32.to_le_bytes()); // CurrentTime
         self.req(26, 1, &b) // owner_events
     }
@@ -116,11 +116,11 @@ impl Conn {
         self.s.write_all(&v)
     }
 
-    /// Lê até chegar uma resposta (byte 1); descarta eventos que chegarem antes.
+    /// Reads until a reply arrives (byte 1); discards events that arrive before it.
     fn reply(&mut self) -> Result<Vec<u8>, String> {
         loop {
             let mut h = [0u8; 32];
-            self.s.read_exact(&mut h).map_err(|e| format!("lendo resposta X: {e}"))?;
+            self.s.read_exact(&mut h).map_err(|e| format!("reading X reply: {e}"))?;
             match h[0] {
                 1 => {
                     let mut v = h.to_vec();
@@ -130,7 +130,7 @@ impl Conn {
                     v.extend(more);
                     return Ok(v);
                 }
-                0 => return Err(format!("erro X: código {} opcode {}", h[1], h[10])),
+                0 => return Err(format!("X error: code {} opcode {}", h[1], h[10])),
                 _ => {}
             }
         }
@@ -155,7 +155,7 @@ impl Conn {
         self.req(18, 0, &b)
     }
 
-    /// Envia a imagem BGRX (32 bpp) inteira, em faixas que cabem no limite de requisição.
+    /// Sends the entire BGRX (32 bpp) image, in strips that fit the request limit.
     fn put_image(&mut self, win: u32, gc: u32, depth: u8, w: usize, h: usize, px: &[u8]) -> std::io::Result<()> {
         let row = w * 4;
         let rows_per = ((self.max_req_bytes.saturating_sub(64)) / row).clamp(1, h);
@@ -192,13 +192,13 @@ struct Setup {
 impl Setup {
     fn parse(a: &[u8]) -> Result<Setup, String> {
         if a.len() < 40 {
-            return Err("resposta de setup curta".into());
+            return Err("short setup reply".into());
         }
         let vendor = u16le(a, 16) as usize;
         let nformats = a[21] as usize;
         let screen = 32 + pad4(vendor) + nformats * 8;
         if a.len() < screen + 40 {
-            return Err("resposta de setup sem tela".into());
+            return Err("setup reply without a screen".into());
         }
         let depth = a[screen + 38];
         let ok = (0..nformats).any(|i| {
@@ -206,22 +206,22 @@ impl Setup {
             a[f] == depth && a[f + 1] == 32
         });
         if !ok {
-            return Err(format!("o servidor X não oferece 32 bits por pixel na profundidade {depth}"));
+            return Err(format!("the X server does not offer 32 bits per pixel at depth {depth}"));
         }
         if a[22] != 0 {
-            return Err("servidor X big-endian não suportado".into());
+            return Err("big-endian X server not supported".into());
         }
         Ok(Setup { width: u16le(a, screen + 20), height: u16le(a, screen + 22), base: u32le(a, 4), root: u32le(a, screen), black: u32le(a, screen + 12), depth, min_kc: a[26], max_kc: a[27] })
     }
 }
 
-/// Tamanho da tela do servidor X (para `--screen auto`).
+/// Size of the X server's screen (for `--screen auto`).
 pub fn root_size() -> Result<(u32, u32), String> {
     let (_, setup) = Conn::connect()?;
     Ok((setup.width as u32, setup.height as u32))
 }
 
-// ---- teclado ------------------------------------------------------------------------------
+// ---- keyboard -----------------------------------------------------------------------------
 
 fn vk_of(ks: u32) -> Option<u32> {
     Some(match ks {
@@ -250,7 +250,7 @@ fn vk_of(ks: u32) -> Option<u32> {
         0xffff => 46,
         0xffbe..=0xffc9 => 112 + (ks - 0xffbe),
         0xffb0..=0xffb9 => 96 + (ks - 0xffb0),
-        // teclado numérico sem NumLock: setas e navegação
+        // numeric keypad without NumLock: arrows and navigation
         0xff95 => 36,
         0xff96 => 37,
         0xff97 => 38,
@@ -282,8 +282,8 @@ fn vk_of(ks: u32) -> Option<u32> {
     })
 }
 
-/// Código de varredura de uma tecla do teclado numérico (não estendida). As setas normais entram como as do
-/// keypad porque o Civilization só move unidades com as não estendidas.
+/// Scan code of a numeric keypad key (not extended). The regular arrows are entered as the
+/// keypad ones because Civilization only moves units with the non-extended ones.
 fn keypad_scan(ks: u32) -> Option<u32> {
     Some(match ks {
         0xff51 => 0x4B,
@@ -308,7 +308,7 @@ fn keypad_scan(ks: u32) -> Option<u32> {
     })
 }
 
-/// Caractere digitado (para `WM_CHAR`) a partir do keysym já com Shift/CapsLock aplicados.
+/// Typed character (for `WM_CHAR`) from the keysym with Shift/CapsLock already applied.
 fn char_of(ks: u32) -> Option<u32> {
     match ks {
         0x20..=0x7e | 0xa0..=0xff => Some(ks),
@@ -336,7 +336,7 @@ impl Keymap {
     }
 }
 
-// ---- janela e laço de eventos ---------------------------------------------------------------
+// ---- window and event loop ------------------------------------------------------------------
 
 struct Ev {
     code: u8,
@@ -347,7 +347,7 @@ struct Ev {
     state: u16,
 }
 
-/// `--fullscreen`: tela cheia com o mouse preso à janela. O modo janela continua sendo o padrão.
+/// `--fullscreen`: full screen with the mouse confined to the window. Windowed mode remains the default.
 static FULLSCREEN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 pub fn set_fullscreen() {
@@ -365,11 +365,11 @@ pub fn start() -> Result<(), String> {
     let wm_delete = c.intern_atom("WM_DELETE_WINDOW")?;
     let (win, gc) = (setup.base | 1, setup.base | 2);
 
-    // CreateWindow: pai = raiz, profundidade/visual copiados do pai; fundo preto; eventos de entrada.
+    // CreateWindow: parent = root, depth/visual copied from the parent; black background; input events.
     let mut b = Vec::new();
     b.extend_from_slice(&win.to_le_bytes());
     b.extend_from_slice(&setup.root.to_le_bytes());
-    // centralizada na tela (o gerenciador de janelas respeita a posição pedida com USPosition)
+    // centered on the screen (the window manager honors the position requested with USPosition)
     let cx = ((setup.width as i32 - w as i32) / 2).max(0) as i16;
     let cy = ((setup.height as i32 - h as i32) / 2).max(0) as i16;
     for v in [cx, cy] {
@@ -377,27 +377,27 @@ pub fn start() -> Result<(), String> {
     }
     b.extend_from_slice(&(w as u16).to_le_bytes());
     b.extend_from_slice(&(h as u16).to_le_bytes());
-    b.extend_from_slice(&0u16.to_le_bytes()); // borda
+    b.extend_from_slice(&0u16.to_le_bytes()); // border
     b.extend_from_slice(&1u16.to_le_bytes()); // InputOutput
     b.extend_from_slice(&0u32.to_le_bytes()); // visual: CopyFromParent
     b.extend_from_slice(&(0x2u32 | 0x800).to_le_bytes()); // BackPixel | EventMask
     b.extend_from_slice(&setup.black.to_le_bytes());
     // KeyPress|KeyRelease|ButtonPress|ButtonRelease|PointerMotion|Exposure|StructureNotify
-    // FocusChange só em tela cheia: o mouse é solto quando a janela perde o foco.
+    // FocusChange only in full screen: the mouse is released when the window loses focus.
     let focus = if fullscreen() { 0x20_0000u32 } else { 0 };
     b.extend_from_slice(&(1u32 | 2 | 4 | 8 | 64 | 0x8000 | 0x20000 | focus).to_le_bytes());
     c.req(1, 0, &b).map_err(|e| e.to_string())?;
-    // CreateGC sem atributos.
+    // CreateGC without attributes.
     let mut g = Vec::new();
     g.extend_from_slice(&gc.to_le_bytes());
     g.extend_from_slice(&win.to_le_bytes());
     g.extend_from_slice(&0u32.to_le_bytes());
     c.req(55, 0, &g).map_err(|e| e.to_string())?;
 
-    // Título, tamanho fixo (WM_NORMAL_HINTS: PMinSize|PMaxSize) e aviso de fechamento.
+    // Title, fixed size (WM_NORMAL_HINTS: PMinSize|PMaxSize) and close notification.
     c.change_property(win, 39, 31, 8, b"winlayer").map_err(|e| e.to_string())?;
     let mut hints = [0u32; 18];
-    hints[0] = 1 | 16; // USPosition | PMinSize (sem tamanho máximo: a janela pode ser redimensionada e maximizada)
+    hints[0] = 1 | 16; // USPosition | PMinSize (no maximum size: the window can be resized and maximized)
     hints[1] = cx as u32;
     hints[2] = cy as u32;
     hints[5] = 640;
@@ -406,7 +406,7 @@ pub fn start() -> Result<(), String> {
     c.change_property(win, 40, 41, 32, &hb).map_err(|e| e.to_string())?;
     c.change_property(win, wm_protocols, 4, 32, &wm_delete.to_le_bytes()).map_err(|e| e.to_string())?;
 
-    // Mapa de teclado (keycode -> keysym).
+    // Keyboard map (keycode -> keysym).
     let count = setup.max_kc - setup.min_kc + 1;
     c.req(101, 0, &[setup.min_kc, count, 0, 0]).map_err(|e| e.to_string())?;
     let r = c.reply()?;
@@ -415,7 +415,7 @@ pub fn start() -> Result<(), String> {
     let keymap = Keymap { per: per.max(1), min: setup.min_kc, syms };
 
     if fullscreen() {
-        // Antes de mapear, basta gravar o estado (EWMH); o gerenciador de janelas aplica ao mostrar.
+        // Before mapping, it is enough to write the state (EWMH); the window manager applies it on show.
         let state = c.intern_atom("_NET_WM_STATE")?;
         let full = c.intern_atom("_NET_WM_STATE_FULLSCREEN")?;
         c.change_property(win, state, 4, 32, &full.to_le_bytes()).map_err(|e| e.to_string())?;
@@ -424,12 +424,12 @@ pub fn start() -> Result<(), String> {
     let depth = setup.depth;
     c.s.set_read_timeout(Some(Duration::from_millis(8))).ok();
 
-    eprintln!("[winlayer] janela X11 {w}x{h} aberta (binário de {} UTC)", build_stamp());
+    eprintln!("[winlayer] X11 window {w}x{h} opened (binary from {} UTC)", build_stamp());
     std::thread::spawn(move || {
         if let Err(e) = run(c, keymap, win, gc, depth, wm_delete, w, h) {
             eprintln!("[winlayer] X11: {e}");
         }
-        std::process::exit(0); // janela fechada ou conexão perdida
+        std::process::exit(0); // window closed or connection lost
     });
     Ok(())
 }
@@ -437,21 +437,21 @@ pub fn start() -> Result<(), String> {
 #[allow(clippy::too_many_arguments)]
 fn run(mut c: Conn, keymap: Keymap, win: u32, gc: u32, depth: u8, wm_delete: u32, w: usize, h: usize) -> Result<(), String> {
     let mut buf: Vec<u8> = Vec::new();
-    let (mut cur_w, mut cur_h) = (w, h); // tamanho atual da janela X
+    let (mut cur_w, mut cur_h) = (w, h); // current size of the X window
     let mut last_version = u64::MAX;
     let mut dirty = true;
     let mut last_draw = std::time::Instant::now();
     let mut tmp = [0u8; 8192];
-    // diagnóstico: WINLAYER_X11_WINRESIZE=1 redimensiona a janela real via ConfigureWindow e conta eventos/quadros
-    // o valor é o atraso em segundos antes do primeiro redimensionamento
+    // diagnostics: WINLAYER_X11_WINRESIZE=1 resizes the real window via ConfigureWindow and counts events/frames
+    // the value is the delay in seconds before the first resize
     let wr_delay: u64 = std::env::var("WINLAYER_X11_WINRESIZE").ok().and_then(|v| v.parse().ok()).unwrap_or(0);
     let winresize = std::env::var_os("WINLAYER_X11_WINRESIZE").is_some();
     let stats = std::env::var_os("WINLAYER_X11_STATS").is_some();
     let wr_start = Instant::now();
     let (mut wr_i, mut wr_t, mut cfg_events, mut frames, mut stat_t) = (0u32, Instant::now(), 0u32, 0u32, Instant::now());
-    let stress = std::env::var_os("WINLAYER_X11_STRESS").is_some(); // teste: muda o tamanho da tela o tempo todo
+    let stress = std::env::var_os("WINLAYER_X11_STRESS").is_some(); // test: keeps changing the screen size
     let (mut stress_i, mut stress_t) = (0usize, Instant::now());
-    // Mouse preso (só com --fullscreen). A janela só pode ser presa depois de visível, por isso as novas tentativas.
+    // Confined mouse (only with --fullscreen). The window can only be grabbed once visible, hence the retries.
     let mut grab_wanted = fullscreen();
     let (mut focused, mut grabbed, mut grab_pending, mut grab_t, mut grab_logged) = (true, false, false, Instant::now(), false);
     loop {
@@ -476,16 +476,16 @@ fn run(mut c: Conn, keymap: Keymap, win: u32, gc: u32, depth: u8, wm_delete: u32
             b.extend_from_slice(&nw.to_le_bytes());
             b.extend_from_slice(&nh.to_le_bytes());
             let _ = c.req(12, 0, &b);
-            eprintln!("[x11] pedindo janela {nw}x{nh}");
+            eprintln!("[x11] requesting window {nw}x{nh}");
         }
         if (winresize || stats) && stat_t.elapsed() >= Duration::from_secs(1) {
-            // com WINLAYER_X11_STATS só aparece quando houve atividade (evento ou quadro desenhado)
+            // with WINLAYER_X11_STATS it only appears when there was activity (event or frame drawn)
             if winresize || cfg_events > 0 || frames > 0 {
-                eprintln!("[x11] último segundo: {cfg_events} ConfigureNotify, {frames} quadros, janela {cur_w}x{cur_h}, tela {}x{}", user32::desktop_w(), user32::desktop_h());
+                eprintln!("[x11] last second: {cfg_events} ConfigureNotify, {frames} frames, window {cur_w}x{cur_h}, screen {}x{}", user32::desktop_w(), user32::desktop_h());
             }
             (cfg_events, frames, stat_t) = (0, 0, Instant::now());
         }
-        // o tamanho da tela virtual muda quando a janela é redimensionada (ver ConfigureNotify)
+        // the virtual screen size changes when the window is resized (see ConfigureNotify)
         let (w, h) = (user32::desktop_w(), user32::desktop_h());
         match c.s.read(&mut tmp) {
             Ok(0) => return Ok(()),
@@ -498,19 +498,19 @@ fn run(mut c: Conn, keymap: Keymap, win: u32, gc: u32, depth: u8, wm_delete: u32
             let code = buf[0] & 0x7F;
             let ev = &buf[..32];
             match code {
-                0 => eprintln!("[winlayer] X11: erro código {} opcode {}", ev[1], ev[10]),
+                0 => eprintln!("[winlayer] X11: error code {} opcode {}", ev[1], ev[10]),
                 2..=6 => evs.push(Ev { code, detail: ev[1], time: u32le(ev, 4), x: u16le(ev, 24) as i16, y: u16le(ev, 26) as i16, state: u16le(ev, 28) }),
                 1 if grab_pending => {
                     grab_pending = false;
                     grabbed = ev[1] == 0;
                     if grabbed && !grab_logged {
                         grab_logged = true;
-                        eprintln!("[winlayer] mouse preso à janela (Ctrl+F10 solta e prende de novo)");
+                        eprintln!("[winlayer] mouse confined to the window (Ctrl+F10 releases and grabs it again)");
                     }
                 }
                 9 => focused = true, // FocusIn
                 10 => {
-                    // FocusOut: sem isso o Alt+Tab deixaria o cursor preso em outro programa
+                    // FocusOut: without this, Alt+Tab would leave the cursor stuck in another program
                     focused = false;
                     if grabbed {
                         c.ungrab_pointer().map_err(|e| e.to_string())?;
@@ -519,27 +519,27 @@ fn run(mut c: Conn, keymap: Keymap, win: u32, gc: u32, depth: u8, wm_delete: u32
                 }
                 12 => dirty = true, // Expose
                 22 => {
-                    // ConfigureNotify: novo tamanho da janela
+                    // ConfigureNotify: new window size
                     let (nw, nh) = (u16le(ev, 20) as usize, u16le(ev, 22) as usize);
                     cfg_events += 1;
                     if nw > 0 && nh > 0 && (nw, nh) != (cur_w, cur_h) {
                         (cur_w, cur_h) = (nw, nh);
-                        // o jogo ganha espaço de verdade: a tela virtual passa a ter o tamanho da janela
-                        // (em tela cheia, a imagem só é ampliada)
+                        // the game gets real extra room: the virtual screen takes on the size of the window
+                        // (in full screen, the image is only enlarged)
                         if !fullscreen() {
                             user32::request_screen(nw.max(640), nh.max(480));
                         }
                         dirty = true;
                     }
                 }
-                33 if u32le(ev, 12) == wm_delete => return Ok(()), // ClientMessage: fechar
+                33 if u32le(ev, 12) == wm_delete => return Ok(()), // ClientMessage: close
                 _ => {}
             }
             let extra = if code == 1 { u32le(ev, 4) as usize * 4 } else { 0 };
             buf.drain(..32 + extra.min(buf.len().saturating_sub(32)));
         }
         let mut lines: Vec<String> = Vec::new();
-        // janela X -> coordenadas do desktop (inverso da escala com barras pretas)
+        // X window -> desktop coordinates (inverse of the letterboxed scaling)
         let (dw, dh, offx, offy) = fit(w, h, cur_w, cur_h);
         let to_desk = |x: i16, y: i16| -> (i16, i16) {
             let dx = ((x as i64 - offx as i64) * w as i64 / dw.max(1) as i64).clamp(0, w as i64 - 1);
@@ -564,7 +564,7 @@ fn run(mut c: Conn, keymap: Keymap, win: u32, gc: u32, depth: u8, wm_delete: u32
                     lines.push(format!("{} {}", if e.code == 4 { "d" } else { "u" }, e.detail - 1));
                 }
                 2 if fullscreen() && e.state & 4 != 0 && keymap.sym(e.detail, 0) == 0xffc7 => {
-                    // Ctrl+F10: solta ou prende o mouse
+                    // Ctrl+F10: releases or grabs the mouse
                     grab_wanted = !grab_wanted;
                     if !grab_wanted && grabbed {
                         c.ungrab_pointer().map_err(|e| e.to_string())?;
@@ -572,14 +572,14 @@ fn run(mut c: Conn, keymap: Keymap, win: u32, gc: u32, depth: u8, wm_delete: u32
                     }
                 }
                 3 if fullscreen() && e.state & 4 != 0 && keymap.sym(e.detail, 0) == 0xffc7 => {}
-                2 if keymap.sym(e.detail, 0) == 0xffc9 => save_print(), // F12: captura de tela
+                2 if keymap.sym(e.detail, 0) == 0xffc9 => save_print(), // F12: screenshot
                 3 if keymap.sym(e.detail, 0) == 0xffc9 => {}
                 2 => {
                     let shift = e.state & 1 != 0;
                     let caps = e.state & 2 != 0;
                     let ctrl_alt = e.state & (4 | 8) != 0;
                     let mut base = keymap.sym(e.detail, 0);
-                    // keypad com NumLock ligado (Mod2): vale o nível dos números, não o da navegação
+                    // keypad with NumLock on (Mod2): the number level applies, not the navigation one
                     if (0xff95..=0xff9f).contains(&base) && e.state & 0x10 != 0 {
                         base = keymap.sym(e.detail, 1);
                     }
@@ -602,7 +602,7 @@ fn run(mut c: Conn, keymap: Keymap, win: u32, gc: u32, depth: u8, wm_delete: u32
                     }
                 }
                 3 => {
-                    // Repetição automática do X = Release+Press com o mesmo tempo: ignora o Release.
+                    // X auto-repeat = Release+Press with the same time: ignores the Release.
                     let repeat = evs.get(i + 1).is_some_and(|n| n.code == 2 && n.detail == e.detail && n.time == e.time);
                     if !repeat {
                         let mut base = keymap.sym(e.detail, 0);
@@ -626,7 +626,7 @@ fn run(mut c: Conn, keymap: Keymap, win: u32, gc: u32, depth: u8, wm_delete: u32
         }
         let v = user32::frame_version();
         if (v != last_version || dirty) && last_draw.elapsed() >= Duration::from_millis(16) {
-            let (w, h, px) = user32::render_bgrx(); // tamanho que realmente foi desenhado
+            let (w, h, px) = user32::render_bgrx(); // size that was actually drawn
             if (cur_w, cur_h) == (w, h) {
                 c.put_image(win, gc, depth, w, h, &px).map_err(|e| e.to_string())?;
             } else {
@@ -641,10 +641,10 @@ fn run(mut c: Conn, keymap: Keymap, win: u32, gc: u32, depth: u8, wm_delete: u32
     }
 }
 
-/// "AAAAMMDD-HHMMSS" (UTC) de um instante em segundos desde 1970.
+/// "YYYYMMDD-HHMMSS" (UTC) of an instant in seconds since 1970.
 fn utc_stamp(secs: u64) -> String {
     let (days, rem) = ((secs / 86400) as i64, secs % 86400);
-    // dias desde 1970 -> data civil (algoritmo de Howard Hinnant)
+    // days since 1970 -> civil date (Howard Hinnant's algorithm)
     let z = days + 719468;
     let era = z.div_euclid(146097);
     let doe = z.rem_euclid(146097);
@@ -657,7 +657,7 @@ fn utc_stamp(secs: u64) -> String {
     format!("{y:04}{m:02}{d:02}-{:02}{:02}{:02}", rem / 3600, rem % 3600 / 60, rem % 60)
 }
 
-/// Data (UTC) do arquivo do próprio executável: mostra no log qual versão está rodando.
+/// Date (UTC) of the executable's own file: shows in the log which version is running.
 pub fn build_stamp() -> String {
     std::env::current_exe()
         .ok()
@@ -667,7 +667,7 @@ pub fn build_stamp() -> String {
         .map_or_else(|| "?".into(), |d| utc_stamp(d.as_secs()))
 }
 
-/// F12: salva o desktop do programa em `out/prints/print-AAAAMMDD-HHMMSS.png` (hora UTC).
+/// F12: saves the program's desktop to `out/prints/print-YYYYMMDD-HHMMSS.png` (UTC time).
 fn save_print() {
     let secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs());
     let _ = std::fs::create_dir_all("out/prints");
@@ -675,20 +675,20 @@ fn save_print() {
     user32::dump_screenshot(&path);
 }
 
-/// Tamanho da imagem do jogo dentro de uma janela `cw`x`ch`, mantendo a proporção: (largura, altura, x, y).
+/// Size of the game image inside a `cw`x`ch` window, keeping the aspect ratio: (width, height, x, y).
 fn fit(w: usize, h: usize, cw: usize, ch: usize) -> (usize, usize, usize, usize) {
     if (cw, ch) == (w, h) || w == 0 || h == 0 {
         return (w, h, 0, 0);
     }
-    // escala = min(cw/w, ch/h), em aritmética inteira
+    // scale = min(cw/w, ch/h), in integer arithmetic
     let (dw, dh) = if cw * h <= ch * w { (cw, (h * cw / w).max(1)) } else { ((w * ch / h).max(1), ch) };
     (dw, dh, (cw - dw) / 2, (ch - dh) / 2)
 }
 
-/// Pesos de amostragem por coluna/linha destino: (índice origem 0, índice origem 1, peso do 1 em 0..=256).
-/// "Bilinear nítida": ao ampliar, a mistura entre dois pixels vizinhos acontece só numa faixa de ~1 pixel
-/// de destino, então as bordas (e a fonte bitmap) continuam firmes e sem larguras desiguais;
-/// ao reduzir, é bilinear comum. Ampliação por múltiplo inteiro dá exatamente o vizinho mais próximo.
+/// Sampling weights per destination column/row: (source index 0, source index 1, weight of 1 in 0..=256).
+/// "Sharp bilinear": when enlarging, the blend between two neighboring pixels happens only in a band of ~1
+/// destination pixel, so edges (and the bitmap font) stay crisp and without uneven widths;
+/// when reducing, it is plain bilinear. Enlarging by an integer multiple gives exactly nearest neighbor.
 fn axis_weights(src: usize, dst: usize) -> Vec<(usize, usize, u32)> {
     let s = dst as f32 / src as f32;
     (0..dst)
@@ -705,7 +705,7 @@ fn axis_weights(src: usize, dst: usize) -> Vec<(usize, usize, u32)> {
         .collect()
 }
 
-/// Escala o desktop (BGRX `w`x`h`) para uma janela `cw`x`ch` mantendo a proporção, com barras pretas.
+/// Scales the desktop (BGRX `w`x`h`) to a `cw`x`ch` window keeping the aspect ratio, with black bars.
 fn scale_to(px: &[u8], w: usize, h: usize, cw: usize, ch: usize) -> Vec<u8> {
     let (dw, dh, ox, oy) = fit(w, h, cw, ch);
     let (xs, ys) = (axis_weights(w, dw), axis_weights(h, dh));
@@ -713,7 +713,7 @@ fn scale_to(px: &[u8], w: usize, h: usize, cw: usize, ch: usize) -> Vec<u8> {
     let mut row = vec![0u32; dw * 4];
     for (y, &(y0, y1, wy)) in ys.iter().enumerate() {
         let (r0, r1) = (&px[y0 * w * 4..(y0 + 1) * w * 4], &px[y1 * w * 4..(y1 + 1) * w * 4]);
-        // mistura vertical de uma coluna de origem por vez, depois horizontal
+        // vertical blend of one source column at a time, then horizontal
         for (x, &(x0, x1, wx)) in xs.iter().enumerate() {
             for c in 0..4 {
                 let top = r0[x0 * 4 + c] as u32 * (256 - wx) + r0[x1 * 4 + c] as u32 * wx;
@@ -734,33 +734,33 @@ mod tests {
     use super::*;
 
     #[test]
-    fn fit_mantem_proporcao_com_barras() {
+    fn fit_keeps_aspect_with_bars() {
         assert_eq!(fit(1024, 616, 1024, 616), (1024, 616, 0, 0));
-        // janela mais larga: barras laterais
+        // wider window: side bars
         assert_eq!(fit(1000, 500, 2000, 800), (1600, 800, 200, 0));
-        // janela mais alta: barras em cima e embaixo
+        // taller window: bars at top and bottom
         assert_eq!(fit(1000, 500, 1000, 800), (1000, 500, 0, 150));
-        // dobro exato
+        // exact double
         assert_eq!(fit(640, 480, 1280, 960), (1280, 960, 0, 0));
     }
 
     #[test]
-    fn escala_preenche_e_centraliza() {
-        // imagem 2x2 (BGRX) numa janela 4x4: cada pixel vira 2x2
+    fn scale_fills_and_centers() {
+        // 2x2 image (BGRX) in a 4x4 window: each pixel becomes 2x2
         let px: Vec<u8> = (0..4u8).flat_map(|i| [i + 1, 0, 0, 0]).collect();
         let out = scale_to(&px, 2, 2, 4, 4);
         let at = |x: usize, y: usize| out[(y * 4 + x) * 4];
         assert_eq!((at(0, 0), at(1, 1), at(2, 0), at(0, 2), at(3, 3)), (1, 1, 2, 3, 4));
-        // janela larga 6x2: imagem 2x2 ocupa 2x2 no centro (barras de 2 px)
+        // wide 6x2 window: 2x2 image occupies 2x2 in the center (2 px bars)
         let out = scale_to(&px, 2, 2, 6, 2);
         let at = |x: usize, y: usize| out[(y * 6 + x) * 4];
         assert_eq!((at(0, 0), at(2, 0), at(3, 1), at(5, 1)), (0, 1, 4, 0));
     }
 
     #[test]
-    fn ampliacao_fracionaria_mantem_bordas_firmes() {
-        // listras de 1 pixel (o pior caso, como traços de fonte) ampliadas 1,37x: os extremos
-        // (preto e branco) têm que continuar existindo, sem virar um cinza uniforme
+    fn fractional_upscale_keeps_sharp_edges() {
+        // 1-pixel stripes (the worst case, like font strokes) enlarged 1.37x: the extremes
+        // (black and white) must still exist, without turning into a uniform gray
         let (w, h) = (20usize, 2usize);
         let px: Vec<u8> = (0..h).flat_map(|_| (0..w).flat_map(|x| { let v = if x % 2 == 0 { 255 } else { 0 }; [v, v, v, 0] })).collect();
         let (cw, ch) = (27usize, 3usize);
@@ -768,6 +768,6 @@ mod tests {
         let (dw, _, ox, _) = fit(w, h, cw, ch);
         let row: Vec<u8> = (0..dw).map(|x| out[(ox + x) * 4]).collect();
         let (hi, lo) = (row.iter().filter(|&&v| v > 200).count(), row.iter().filter(|&&v| v < 55).count());
-        assert!(hi >= row.len() / 4 && lo >= row.len() / 4, "contraste perdido: {hi} claros, {lo} escuros de {}", row.len());
+        assert!(hi >= row.len() / 4 && lo >= row.len() / 4, "contrast lost: {hi} light, {lo} dark out of {}", row.len());
     }
 }

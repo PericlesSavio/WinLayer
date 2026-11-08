@@ -1,4 +1,4 @@
-//! Escritor de PNG sem dependências (deflate "stored", sem compressão).
+//! Dependency-free PNG writer (deflate "stored", no compression).
 
 fn crc32(data: &[u8], mut crc: u32) -> u32 {
     for &b in data {
@@ -18,11 +18,11 @@ fn chunk(out: &mut Vec<u8>, kind: &[u8; 4], data: &[u8]) {
     out.extend_from_slice(&crc.to_be_bytes());
 }
 
-/// `px` em 0xAARRGGBB, `w*h` pixels.
+/// `px` in 0xAARRGGBB, `w*h` pixels.
 pub fn write(path: &str, w: usize, h: usize, px: &[u32]) -> std::io::Result<()> {
     let mut raw = Vec::with_capacity((w * 3 + 1) * h);
     for y in 0..h {
-        raw.push(0); // filtro: nenhum
+        raw.push(0); // filter: none
         for &p in &px[y * w..(y + 1) * w] {
             raw.extend_from_slice(&[(p >> 16) as u8, (p >> 8) as u8, p as u8]);
         }

@@ -1,5 +1,5 @@
-//! Caixa de listagem (`listbox`): itens, ordenação, várias colunas, seleção e desenho.
-//! Mensagens `LB_*` com a numeração do Win32 (0x180..); o Win16 é traduzido em `win16/user.rs`.
+//! List box (`listbox`): items, sorting, multiple columns, selection and drawing.
+//! `LB_*` messages with Win32 numbering (0x180..); Win16 is translated in `win16/user.rs`.
 
 use super::draw::{self, Buf};
 use super::text;
@@ -12,13 +12,13 @@ pub const LBS_MULTICOLUMN: u32 = 0x200;
 pub const WS_HSCROLL: u32 = 0x10_0000;
 pub const WS_VSCROLL: u32 = 0x20_0000;
 
-const SB: i32 = 16; // espessura da barra de rolagem
+const SB: i32 = 16; // scroll bar thickness
 
 #[derive(Default)]
 struct List {
     items: Vec<(Vec<u8>, u32)>,
     sel: i32,
-    /// Primeira linha (coluna única) ou primeira coluna (várias colunas) visível.
+    /// First visible line (single column) or first visible column (multiple columns).
     top: i32,
     colw: i32,
 }
@@ -29,7 +29,7 @@ fn row_h() -> i32 {
     text::line_h()
 }
 
-/// Disposição: (linhas visíveis por coluna, área útil em largura/altura, barra horizontal?, vertical?).
+/// Layout: (visible lines per column, usable width/height area, horizontal bar?, vertical?).
 fn layout(l: &List, style: u32, w: i32, h: i32) -> (i32, i32, i32, bool, bool) {
     let multi = style & LBS_MULTICOLUMN != 0;
     let inner_w = w - 4;
@@ -62,7 +62,7 @@ fn count_cols(l: &List, rows: i32) -> i32 {
     (l.items.len() as i32 + rows - 1) / rows.max(1)
 }
 
-/// Rola para que o item `i` fique visível.
+/// Scrolls so that item `i` is visible.
 fn show_item(l: &mut List, style: u32, rows: i32, view_w: i32, i: i32) {
     if style & LBS_MULTICOLUMN != 0 {
         let cw = l.colw.max(1);
@@ -80,14 +80,14 @@ fn show_item(l: &mut List, style: u32, rows: i32, view_w: i32, i: i32) {
     }
 }
 
-/// Trata uma mensagem `LB_*`. `None` se não for uma mensagem de listbox.
+/// Handles an `LB_*` message. `None` if it is not a listbox message.
 pub fn message(hwnd: u32, style: u32, w_: i32, h_: i32, msg: u32, wp: u32, lp: u32) -> Option<u32> {
     if !(0x180..=0x1A2).contains(&msg) {
         return None;
     }
     let mut all = LISTS.lock().unwrap();
     let l = all.entry(hwnd).or_insert_with(|| List { sel: -1, ..Default::default() });
-    let idx = wp as u16 as i16 as i32; // Win16 passa -1 como 0xFFFF
+    let idx = wp as u16 as i16 as i32; // Win16 passes -1 as 0xFFFF
     let r = match msg {
         0x180 | 0x181 => {
             let item = (cstr(lp), 0);
@@ -180,7 +180,7 @@ pub fn message(hwnd: u32, style: u32, w_: i32, h_: i32, msg: u32, wp: u32, lp: u
                 u32::MAX
             }
         }
-        0x1A0 | 0x193 | 0x194 | 0x192 => 1, // altura/extensão/tabs: sem efeito
+        0x1A0 | 0x193 | 0x194 | 0x192 => 1, // height/extent/tabs: no effect
         _ => 0,
     };
     Some(r)
@@ -194,14 +194,14 @@ pub fn selection(hwnd: u32) -> i32 {
     LISTS.lock().unwrap().get(&hwnd).map_or(-1, |l| l.sel)
 }
 
-/// Clique em (x, y) do cliente: seleciona o item (ou rola pelas barras). Devolve se a seleção mudou.
+/// Click at client (x, y): selects the item (or scrolls via the bars). Returns whether the selection changed.
 pub fn click(hwnd: u32, style: u32, w: i32, h: i32, x: i32, y: i32) -> Option<bool> {
     let mut all = LISTS.lock().unwrap();
     let l = all.entry(hwnd).or_insert_with(|| List { sel: -1, ..Default::default() });
     let multi = style & LBS_MULTICOLUMN != 0;
     let (rows, vw, vh, hbar, vbar) = layout(l, style, w, h);
     if hbar && y >= h - 2 - SB {
-        // barra horizontal: setas nas pontas, trilho = página
+        // horizontal bar: arrows at the ends, track = page
         let cw = l.colw.max(1);
         let vis = (vw / cw).max(1);
         let ncols = count_cols(l, rows);
@@ -227,7 +227,7 @@ pub fn click(hwnd: u32, style: u32, w: i32, h: i32, x: i32, y: i32) -> Option<bo
     Some(changed)
 }
 
-/// Desenha a lista no buffer do controle.
+/// Draws the list in the control's buffer.
 pub fn paint(hwnd: u32, style: u32, b: &mut Buf, focused: bool) {
     let mut all = LISTS.lock().unwrap();
     let l = all.entry(hwnd).or_insert_with(|| List { sel: -1, ..Default::default() });
@@ -253,14 +253,14 @@ pub fn paint(hwnd: u32, style: u32, b: &mut Buf, focused: bool) {
                 b.fill(x, y, (x + cw).min(2 + vw), y + 1, draw::DARK);
             }
         }
-        // recorta o texto à coluna
+        // clips the text to the column
         let mut label = t.clone();
         while label.len() > 1 && text::width(false, &label) > cw - 4 {
             label.pop();
         }
         b.text(x + 2, y, &label, if sel { draw::WHITE } else { draw::BLACK }, false);
     }
-    // barras de rolagem
+    // scroll bars
     let arrow = |b: &mut Buf, l: i32, t: i32, r: i32, bt: i32| {
         b.fill(l, t, r, bt, draw::GRAY);
         b.raised(l, t, r, bt);

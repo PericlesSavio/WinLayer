@@ -1,8 +1,8 @@
-//! Entrada: eventos do visualizador (ou de um roteiro `--events`) viram mensagens do Windows.
+//! Input: events from the viewer (or from an `--events` script) become Windows messages.
 //!
-//! Protocolo (uma linha por evento):
-//!   `m X Y`  mouse em (X, Y) do desktop   `d B` / `u B`  botão B (0 esq, 1 meio, 2 dir) desce/sobe
-//!   `kd VK` / `ku VK`  tecla virtual      `ch C`  caractere   `wait N`  (só roteiro) N quadros de espera
+//! Protocol (one line per event):
+//!   `m X Y`  mouse at desktop (X, Y)   `d B` / `u B`  button B (0 left, 1 middle, 2 right) down/up
+//!   `kd VK` / `ku VK`  virtual key      `ch C`  character   `wait N`  (script only) wait N frames
 
 use super::*;
 use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, AtomicU64, Ordering};
@@ -12,14 +12,14 @@ pub(super) enum Ev {
     Move(i32, i32),
     Down(u32),
     Up(u32),
-    /// (vk, código de varredura explícito: bit 31 = presente, bits 0-7 = scancode, bit 8 = tecla estendida)
+    /// (vk, explicit scan code: bit 31 = present, bits 0-7 = scancode, bit 8 = extended key)
     KeyDown(u32, u32),
     KeyUp(u32, u32),
     Char(u32),
     Wait(u32),
-    /// Captura intermediária: salva `<--shot sem .png>-N.png` e continua a execução.
+    /// Intermediate capture: saves `<--shot without .png>-N.png` and continues running.
     Shot(u32),
-    /// Simula o redimensionamento da janela: nova tela virtual LxA (aplicada entre mensagens).
+    /// Simulates window resizing: new virtual screen WxH (applied between messages).
     Size(u32, u32),
 }
 
@@ -67,12 +67,12 @@ pub fn shot_mode() -> bool {
     SHOT.load(Ordering::Relaxed)
 }
 
-/// Posição atual do cursor no desktop.
+/// Current cursor position on the desktop.
 pub(super) fn cursor() -> (i32, i32) {
     (CUR_X.load(Ordering::Relaxed), CUR_Y.load(Ordering::Relaxed))
 }
 
-/// Marca que a imagem mudou (acorda o visualizador).
+/// Flags that the image changed (wakes the viewer).
 pub fn touch() {
     VERSION.fetch_add(1, Ordering::Relaxed);
 }
@@ -81,7 +81,7 @@ pub fn frame_version() -> u64 {
     VERSION.load(Ordering::Relaxed)
 }
 
-/// Relógio do processo em ms. No modo captura é virtual (avança a cada quadro ocioso).
+/// Process clock in ms. In capture mode it is virtual (advances on each idle frame).
 pub fn now_ms() -> u32 {
     if shot_mode() {
         return VNOW.load(Ordering::Relaxed);
@@ -89,12 +89,12 @@ pub fn now_ms() -> u32 {
     START.lock().unwrap().get_or_insert_with(Instant::now).elapsed().as_millis() as u32
 }
 
-/// Relógio real em ms desde o primeiro uso (também no modo captura, para esperas ocupadas).
+/// Real clock in ms since first use (also in capture mode, for busy waits).
 pub fn real_ms() -> u32 {
     START.lock().unwrap().get_or_insert_with(Instant::now).elapsed().as_millis() as u32
 }
 
-/// Avança o relógio virtual (modo captura). Sem efeito no modo normal.
+/// Advances the virtual clock (capture mode). No effect in normal mode.
 pub fn tick_virtual(ms: u32) {
     if shot_mode() {
         VNOW.fetch_add(ms, Ordering::Relaxed);
@@ -105,7 +105,7 @@ pub(super) fn advance_virtual(ms: u32) {
     VNOW.fetch_add(ms, Ordering::Relaxed);
 }
 
-/// Quadros de espera restantes do roteiro; consome um e devolve true se havia.
+/// Remaining wait frames of the script; consumes one and returns true if there was one.
 pub(super) fn take_wait() -> bool {
     let w = WAITS.load(Ordering::Relaxed);
     if w > 0 {
@@ -132,7 +132,7 @@ pub fn push_events(text: &str) {
             ("u", [b]) => Ev::Up(*b as u32),
             ("kd", [k]) => Ev::KeyDown(*k as u32, 0),
             ("ku", [k]) => Ev::KeyUp(*k as u32, 0),
-            // com scancode e flag de tecla estendida: "kd VK SCAN EXT"
+            // with scancode and extended key flag: "kd VK SCAN EXT"
             ("kd", [k, sc, ex]) => Ev::KeyDown(*k as u32, 0x8000_0000 | (*sc as u32 & 0xFF) | ((*ex as u32 & 1) << 8)),
             ("ku", [k, sc, ex]) => Ev::KeyUp(*k as u32, 0x8000_0000 | (*sc as u32 & 0xFF) | ((*ex as u32 & 1) << 8)),
             ("ch", [c]) => Ev::Char(*c as u32),
@@ -145,7 +145,7 @@ pub fn push_events(text: &str) {
     }
 }
 
-/// Desktop em BGRX (32 bpp little-endian, como o X11 espera).
+/// Desktop in BGRX (32 bpp little-endian, as X11 expects).
 pub fn render_bgrx() -> (usize, usize, Vec<u8>) {
     let (w, h, desk) = render_desktop_sized();
     let mut out = Vec::with_capacity(desk.len() * 4);
@@ -164,7 +164,7 @@ pub fn render_rgba() -> (usize, usize, Vec<u8>) {
     (w, h, out)
 }
 
-// ---- estado de menus popup ----------------------------------------------------------------
+// ---- popup menu state ---------------------------------------------------------------------
 
 pub(super) struct Level {
     pub menu: u32,
@@ -183,7 +183,7 @@ fn item_height(it: &menu::Item) -> i32 {
     if it.flags & menu::MF_SEPARATOR != 0 { SEP_H } else { ROW_H }
 }
 
-/// Separa "texto\tatalho" nas duas colunas do menu.
+/// Splits "text\tshortcut" into the two menu columns.
 fn split_tab(label: &[u8]) -> (&[u8], &[u8]) {
     match label.iter().position(|&c| c == b'\t') {
         Some(i) => (&label[..i], &label[i + 1..]),
@@ -204,7 +204,7 @@ pub(super) fn level_size(menu_h: u32) -> (i32, i32) {
     (w, items.iter().map(item_height).sum::<i32>() + 4)
 }
 
-/// Índice do item sob o ponto (relativo ao topo do nível) e o y do seu topo.
+/// Index of the item under the point (relative to the top of the level) and the y of its top.
 fn level_item_at(menu_h: u32, ry: i32) -> Option<(usize, i32)> {
     let mut y = 2;
     for (i, it) in menu::items(menu_h).iter().enumerate() {
@@ -217,7 +217,7 @@ fn level_item_at(menu_h: u32, ry: i32) -> Option<(usize, i32)> {
     None
 }
 
-/// Retângulos (x0, x1) dos itens da barra de menu da janela, na tela.
+/// Rectangles (x0, x1) of the window's menu bar items, on screen.
 fn bar_layout(w: &Window, cx: i32) -> Vec<(i32, i32, menu::Item)> {
     let mut x = cx + 8;
     menu::items(w.menu)
@@ -277,13 +277,13 @@ enum Hit {
     Caption(u32),
     Close(u32),
     Frame(u32),
-    MenuBar(u32, usize, i32, i32), // janela, índice, x e y da base do item
+    MenuBar(u32, usize, i32, i32), // window, index, x and y of the item's base
     Client(u32),
 }
 
 fn deepest(s: &State, parent: u32, x: i32, y: i32) -> u32 {
     let mut kids: Vec<u32> = s.windows.iter().filter(|(_, w)| w.parent == parent && w.style & WS_CHILD != 0 && w.visible).map(|(&h, _)| h).collect();
-    kids.sort_by(|a, b| b.cmp(a)); // criados depois ficam por cima
+    kids.sort_by(|a, b| b.cmp(a)); // created later stay on top
     for k in kids {
         let (ox, oy) = client_origin(s, k);
         let c = &s.windows[&k];
@@ -344,7 +344,7 @@ fn activate(s: &mut State, top: u32) {
         w.z = z;
     }
     s.active = top;
-    // Janelas "owned" (popups cujo pai é `top`) ficam sempre acima do dono, na ordem em que estavam.
+    // "Owned" windows (popups whose parent is `top`) always stay above the owner, in their existing order.
     let mut owned: Vec<(u64, u32)> = s.windows.iter().filter(|(_, w)| w.parent == top && w.style & WS_CHILD == 0).map(|(&h, w)| (w.z, h)).collect();
     owned.sort();
     for (_, h) in owned {
@@ -354,7 +354,7 @@ fn activate(s: &mut State, top: u32) {
     }
 }
 
-// ---- mensagens de entrada -----------------------------------------------------------------
+// ---- input messages -----------------------------------------------------------------------
 
 fn mk_flags(s: &State) -> u32 {
     let mut f = BUTTONS.load(Ordering::Relaxed);
@@ -372,7 +372,7 @@ fn mouse_lparam(s: &State, hwnd: u32, x: i32, y: i32) -> u32 {
     (((y - oy) as u32 & 0xFFFF) << 16) | ((x - ox) as u32 & 0xFFFF)
 }
 
-/// Janela que recebe o mouse: a capturada, ou a que está sob o ponto.
+/// Window that receives the mouse: the captured one, or the one under the point.
 fn mouse_target(s: &State, x: i32, y: i32) -> Option<u32> {
     if s.capture != 0 && s.windows.contains_key(&s.capture) {
         return Some(s.capture);
@@ -388,7 +388,7 @@ fn open_popup(s: &mut State, owner: u32, bar_menu: u32, item_menu: u32, x: i32, 
     touch();
 }
 
-/// Mensagens que o dono do menu recebe ao abri-lo (para o programa habilitar/marcar itens).
+/// Messages the menu owner receives when opening it (so the program can enable/check items).
 fn init_menu_msgs(owner: u32, bar: u32, popup: u32, idx: usize) {
     send(owner, WM_INITMENU, bar, 0);
     send(owner, WM_INITMENUPOPUP, popup, idx as u32);
@@ -396,7 +396,7 @@ fn init_menu_msgs(owner: u32, bar: u32, popup: u32, idx: usize) {
 
 fn popup_move(s: &mut State, x: i32, y: i32) -> bool {
     let Some(p) = s.popup.as_mut() else { return false };
-    // nível mais interno que contém o ponto
+    // innermost level containing the point
     for li in (0..p.levels.len()).rev() {
         let (w, h) = level_size(p.levels[li].menu);
         let (lx, ly, lmenu) = (p.levels[li].x, p.levels[li].y, p.levels[li].menu);
@@ -417,7 +417,7 @@ fn popup_move(s: &mut State, x: i32, y: i32) -> bool {
     false
 }
 
-/// Clique com o popup aberto. Devolve true se o clique foi consumido.
+/// Click with the popup open. Returns true if the click was consumed.
 fn popup_click(s: &mut State, x: i32, y: i32) -> bool {
     let Some(p) = s.popup.as_ref() else { return false };
     let owner = p.owner;
@@ -435,14 +435,14 @@ fn popup_click(s: &mut State, x: i32, y: i32) -> bool {
             return true;
         }
     }
-    s.popup = None; // clicou fora: fecha; o clique segue para o tratamento normal
+    s.popup = None; // clicked outside: closes; the click goes on to normal handling
     touch();
     false
 }
 
-// ---- processamento dos eventos ------------------------------------------------------------
+// ---- event processing ---------------------------------------------------------------------
 
-/// Esvazia a fila de eventos gerando mensagens e dispara os timers vencidos.
+/// Drains the event queue generating messages and fires expired timers.
 pub(super) fn pump() {
     loop {
         if WAITS.load(Ordering::Relaxed) > 0 {
@@ -452,7 +452,7 @@ pub(super) fn pump() {
         handle(ev);
     }
     fire_timers();
-    super::super::winmm::poll(); // buffers de waveOut concluídos e timeSetEvent
+    super::super::winmm::poll(); // completed waveOut buffers and timeSetEvent
 }
 
 fn handle(ev: Ev) {
@@ -471,7 +471,7 @@ fn handle(ev: Ev) {
             CUR_Y.store(y, Ordering::Relaxed);
             let mut s = STATE.lock().unwrap();
             if s.resize.is_some() {
-                return; // o tamanho só muda ao soltar o botão
+                return; // the size only changes when the button is released
             }
             if let Some((h, dx, dy)) = s.drag {
                 if let Some(w) = s.windows.get_mut(&h) {
@@ -486,7 +486,7 @@ fn handle(ev: Ev) {
             if let Some(t) = mouse_target(&s, x, y) {
                 let lp = mouse_lparam(&s, t, x, y);
                 let f = mk_flags(&s);
-                // junta movimentos consecutivos
+                // merges consecutive moves
                 if let Some(last) = s.queue.back_mut() {
                     if last.hwnd == t && last.message == WM_MOUSEMOVE {
                         *last = Msg { hwnd: t, message: WM_MOUSEMOVE, wparam: f, lparam: lp };
@@ -514,7 +514,7 @@ fn handle(ev: Ev) {
 }
 
 fn button_msgs(b: u32) -> (u32, u32, u32, u32) {
-    // (máscara MK, DOWN, UP, DBLCLK)
+    // (MK mask, DOWN, UP, DBLCLK)
     match b {
         0 => (MK_LBUTTON, 0x201, 0x202, 0x203),
         2 => (MK_RBUTTON, 0x204, 0x205, 0x206),
@@ -523,12 +523,12 @@ fn button_msgs(b: u32) -> (u32, u32, u32, u32) {
 }
 
 const WS_THICKFRAME: u32 = 0x0004_0000;
-/// Até esta distância de um canto, o arrasto mexe nos dois lados.
+/// Within this distance of a corner, the drag moves both sides.
 const CORNER: i32 = 16;
 const MIN_W: i32 = 120;
 const MIN_H: i32 = 80;
 
-/// Arrasto da moldura: quais lados se movem e a geometria no início.
+/// Frame drag: which sides move and the geometry at the start.
 #[derive(Clone, Copy)]
 pub(super) struct Resize {
     pub(super) hwnd: u32,
@@ -541,7 +541,7 @@ pub(super) struct Resize {
 }
 
 impl Resize {
-    /// `None` se a janela não for redimensionável.
+    /// `None` if the window is not resizable.
     fn start(s: &State, hwnd: u32, x: i32, y: i32) -> Option<Resize> {
         let w = s.windows.get(&hwnd)?;
         if w.style & WS_THICKFRAME == 0 {
@@ -552,11 +552,11 @@ impl Resize {
         let near_y = dt < CORNER || db <= CORNER;
         let (left, right) = (dl < BORDER || (near_y && dl < CORNER), dr <= BORDER || (near_y && dr <= CORNER));
         let (top, bottom) = (dt < BORDER || (near_x && dt < CORNER), db <= BORDER || (near_x && db <= CORNER));
-        // A área vazia da barra de menu também conta como moldura, mas não é borda.
+        // The empty area of the menu bar also counts as frame, but it is not an edge.
         (left || right || top || bottom).then_some(Resize { hwnd, left, right, top, bottom, start: (x, y), rect: (w.x, w.y, w.w, w.h) })
     }
 
-    /// Nova geometria com o cursor em (x, y); o lado oposto fica parado mesmo no tamanho mínimo.
+    /// New geometry with the cursor at (x, y); the opposite side stays still even at minimum size.
     fn geometry(&self, x: i32, y: i32) -> (i32, i32, i32, i32) {
         let (mut l, mut t, w, h) = self.rect;
         let (dx, dy) = (x - self.start.0, y - self.start.1);
@@ -592,8 +592,8 @@ fn on_button(b: u32, down: bool) {
     {
         let mut s = STATE.lock().unwrap();
         if !down {
-            // Como no Windows da época, um único WM_SIZE ao soltar: programas recriam bitmaps a cada mensagem,
-            // e uma por movimento do mouse esgota a memória dos jogos de 16 bits.
+            // As on Windows of the era, a single WM_SIZE on release: programs recreate bitmaps on each message,
+            // and one per mouse move exhausts the memory of 16-bit games.
             if let Some(r) = s.resize.take() {
                 drop(s);
                 let (nx, ny, nw, nh) = r.geometry(x, y);
@@ -604,7 +604,7 @@ fn on_button(b: u32, down: bool) {
                 return;
             }
             if s.popup.is_some() {
-                return; // o clique foi tratado no `down`
+                return; // the click was handled in `down`
             }
             if let Some(t) = mouse_target(&s, x, y) {
                 let lp = mouse_lparam(&s, t, x, y);
@@ -616,7 +616,7 @@ fn on_button(b: u32, down: bool) {
         if popup_click(&mut s, x, y) {
             return;
         }
-        // com captura ativa o clique vai direto para a janela capturada
+        // with capture active the click goes straight to the captured window
         if s.capture != 0 {
             if let Some(t) = mouse_target(&s, x, y) {
                 let lp = mouse_lparam(&s, t, x, y);
@@ -626,9 +626,9 @@ fn on_button(b: u32, down: bool) {
             return;
         }
         if std::env::var_os("WINLAYER_TRACE").is_some() {
-            let kind = match hit(&s, x, y) { Hit::None => "nada".to_string(), Hit::Caption(h) => format!("título {h:#x}"), Hit::Close(h) => format!("fechar {h:#x}"), Hit::Frame(h) => format!("moldura {h:#x}"), Hit::MenuBar(h, ..) => format!("barra de menu {h:#x}"), Hit::Client(h) => format!("cliente {h:#x}") };
+            let kind = match hit(&s, x, y) { Hit::None => "nothing".to_string(), Hit::Caption(h) => format!("caption {h:#x}"), Hit::Close(h) => format!("close {h:#x}"), Hit::Frame(h) => format!("frame {h:#x}"), Hit::MenuBar(h, ..) => format!("menu bar {h:#x}"), Hit::Client(h) => format!("client {h:#x}") };
             let tops: Vec<String> = s.windows.iter().filter(|(_, w)| w.style & WS_CHILD == 0).map(|(h, w)| format!("{h:#x}[z={} vis={} {},{} {}x{}]", w.z, w.visible, w.x, w.y, w.w, w.h)).collect();
-            eprintln!("[input] clique em ({x},{y}) -> {kind}; capture={:#x}; topos: {}", s.capture, tops.join(" "));
+            eprintln!("[input] click at ({x},{y}) -> {kind}; capture={:#x}; tops: {}", s.capture, tops.join(" "));
         }
         match hit(&s, x, y) {
             Hit::None => {}
@@ -694,9 +694,9 @@ fn vk_index(vk: u32) -> usize {
     (vk & 0xFF) as usize
 }
 
-/// Código de varredura (conjunto 1 do PC/AT) e flag de tecla estendida de uma tecla virtual, para quando
-/// quem enviou a tecla não informou (roteiros de teste, navegador). Programas como o Civilization usam
-/// isso para distinguir as setas do teclado numérico.
+/// Scan code (PC/AT set 1) and extended key flag of a virtual key, for when
+/// the key sender did not provide it (test scripts, browser). Programs like Civilization use
+/// this to tell the numeric keypad arrows apart.
 pub fn default_scan(vk: u32) -> (u32, u32) {
     const ROW_Q: &[u8] = b"QWERTYUIOP";
     const ROW_A: &[u8] = b"ASDFGHJKL";
@@ -755,7 +755,7 @@ pub fn default_scan(vk: u32) -> (u32, u32) {
 }
 
 fn on_key(vk: u32, down: bool, explicit: u32) {
-    let mut dialog_action: Option<(u32, u32)> = None; // (diálogo, id do comando)
+    let mut dialog_action: Option<(u32, u32)> = None; // (dialog, command id)
     {
         let mut s = STATE.lock().unwrap();
         let was = s.keys[vk_index(vk)];
@@ -768,7 +768,7 @@ fn on_key(vk: u32, down: bool, explicit: u32) {
             s.popup = None;
             return;
         }
-        // Teclas de diálogo: Enter/Esc/Tab, tratadas antes de entregar a tecla.
+        // Dialog keys: Enter/Esc/Tab, handled before delivering the key.
         if down {
             let top = top_of(&s, target);
             let is_dialog = s.windows.get(&top).is_some_and(|w| w.class == DIALOG_CLASS);
@@ -831,14 +831,14 @@ fn fire_timers() {
         }
     }
     for m in fire {
-        // no máximo um WM_TIMER pendente por timer
+        // at most one pending WM_TIMER per timer
         if !s.timer_msgs.iter().any(|q| q.hwnd == m.hwnd && q.wparam == m.wparam) {
             s.timer_msgs.push_back(m);
         }
     }
 }
 
-// ---- API exportada ------------------------------------------------------------------------
+// ---- exported API -------------------------------------------------------------------------
 
 pub fn resolve(name: &str) -> Option<usize> {
     exports!(
@@ -910,7 +910,7 @@ fn key_down(vk: u32) -> bool {
 
 #[allow(non_snake_case)]
 extern "stdcall" fn GetKeyState(vk: i32) -> i16 {
-    if key_down(vk as u32) { -128 } else { 0 } // bit 15 = pressionada
+    if key_down(vk as u32) { -128 } else { 0 } // bit 15 = pressed
 }
 
 #[allow(non_snake_case)]
@@ -1001,7 +1001,7 @@ extern "stdcall" fn GetCapture() -> u32 {
     STATE.lock().unwrap().capture
 }
 
-// ---- aceleradores -------------------------------------------------------------------------
+// ---- accelerators -------------------------------------------------------------------------
 
 #[allow(non_snake_case)]
 unsafe extern "stdcall" fn LoadAcceleratorsA(inst: u32, name: u32) -> u32 {
@@ -1009,7 +1009,7 @@ unsafe extern "stdcall" fn LoadAcceleratorsA(inst: u32, name: u32) -> u32 {
     resources::find(base, &resources::ResId::Id(resources::RT_ACCELERATOR), &resources::res_id(name)).map_or(0, |r| r.1)
 }
 
-/// Se a mensagem de teclado casa com um atalho da tabela, envia WM_COMMAND e devolve 1.
+/// If the keyboard message matches a shortcut in the table, sends WM_COMMAND and returns 1.
 #[allow(non_snake_case)]
 unsafe extern "stdcall" fn TranslateAcceleratorA(hwnd: u32, table: u32, msg: *const u32) -> i32 {
     if table == 0 {
@@ -1042,7 +1042,7 @@ unsafe extern "stdcall" fn TranslateAcceleratorA(hwnd: u32, table: u32, msg: *co
     }
 }
 
-/// Tecla virtual pressionada (para a camada Win16 e aceleradores).
+/// Virtual key pressed (for the Win16 layer and accelerators).
 pub fn input_key_down(vk: i32) -> bool {
     key_down(vk as u32)
 }
@@ -1056,12 +1056,12 @@ mod resize_tests {
     }
 
     #[test]
-    fn canto_inferior_direito_so_muda_o_tamanho() {
+    fn bottom_right_corner_only_changes_size() {
         assert_eq!(r(false, true, false, true).geometry(50, 20), (100, 100, 350, 220));
     }
 
     #[test]
-    fn lado_esquerdo_move_a_origem_e_respeita_o_minimo() {
+    fn left_edge_moves_origin_and_respects_minimum() {
         assert_eq!(r(true, false, false, false).geometry(-40, 0), (60, 100, 340, 200));
         assert_eq!(r(true, false, false, false).geometry(1000, 0), (280, 100, 120, 200));
     }

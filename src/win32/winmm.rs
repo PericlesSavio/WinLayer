@@ -1,5 +1,5 @@
-//! winmm.dll — som (sndPlaySound, PlaySound, waveOut), temporizadores de multimídia e stubs de MCI,
-//! joystick e MIDI. A saída de áudio vai para o visualizador (ver `audio.rs`).
+//! winmm.dll — sound (sndPlaySound, PlaySound, waveOut), multimedia timers and stubs for MCI,
+//! joystick and MIDI. Audio output goes to the viewer (see `audio.rs`).
 
 use super::{call5, user32};
 use crate::audio;
@@ -27,7 +27,7 @@ const SND_LOOP: u32 = 0x08;
 const SND_ALIAS: u32 = 0x10000;
 const SND_RESOURCE: u32 = 0x40004;
 
-/// Núcleo de sndPlaySound/PlaySound (também usado pela camada Win16).
+/// Core of sndPlaySound/PlaySound (also used by the Win16 layer).
 pub unsafe fn play_sound(name: u32, flags: u32) -> u32 {
     if name == 0 {
         audio::stop();
@@ -35,10 +35,10 @@ pub unsafe fn play_sound(name: u32, flags: u32) -> u32 {
     }
     let looped = flags & SND_LOOP != 0;
     if flags & SND_RESOURCE == SND_RESOURCE {
-        return 0; // sons embutidos em recursos: ainda não
+        return 0; // sounds embedded in resources: not yet
     }
     if flags & SND_ALIAS == SND_ALIAS {
-        audio::beep(); // "SystemDefault" e afins
+        audio::beep(); // "SystemDefault" and the like
         return 1;
     }
     if flags & SND_MEMORY != 0 {
@@ -62,7 +62,7 @@ unsafe extern "stdcall" fn PlaySoundA(name: u32, _hmod: u32, flags: u32) -> u32 
 
 #[allow(non_snake_case)]
 extern "stdcall" fn timeGetTime() -> u32 {
-    user32::tick_virtual(1); // ver GetTickCount
+    user32::tick_virtual(1); // see GetTickCount
     user32::now_ms()
 }
 
@@ -76,7 +76,7 @@ extern "stdcall" fn timeEndPeriod(_ms: u32) -> u32 {
     0
 }
 
-// ---- temporizadores de multimídia ---------------------------------------------------------
+// ---- multimedia timers --------------------------------------------------------------------
 
 struct MmTimer {
     due: u32,
@@ -104,7 +104,7 @@ extern "stdcall" fn timeSetEvent(delay: u32, _res: u32, callback: u32, user: u32
             }
             loop {
                 std::thread::sleep(std::time::Duration::from_millis(1));
-                user32::tick_virtual(1); // o relógio virtual do modo captura também anda com a thread principal bloqueada
+                user32::tick_virtual(1); // the capture mode virtual clock also runs with the main thread blocked
                 fire_timers();
             }
         });
@@ -115,7 +115,7 @@ extern "stdcall" fn timeSetEvent(delay: u32, _res: u32, callback: u32, user: u32
 
 #[allow(non_snake_case)]
 extern "stdcall" fn timeKillEvent(id: u32) -> u32 {
-    TIMERS.lock().unwrap().remove(&id).is_none() as u32 * 97 // MMSYSERR_INVALPARAM se não existir
+    TIMERS.lock().unwrap().remove(&id).is_none() as u32 * 97 // MMSYSERR_INVALPARAM if it does not exist
 }
 
 // ---- waveOut ------------------------------------------------------------------------------
@@ -135,7 +135,7 @@ struct Pending {
 
 static WAVES: Mutex<BTreeMap<u32, Wave>> = Mutex::new(BTreeMap::new());
 static PENDING: Mutex<Vec<Pending>> = Mutex::new(Vec::new());
-/// Instante (ms do relógio do processo) em que o fluxo termina de tocar.
+/// Instant (process clock ms) at which the stream finishes playing.
 static STREAM_END: Mutex<u32> = Mutex::new(0);
 static NEXT_WAVE: Mutex<u32> = Mutex::new(0x6100);
 
@@ -146,7 +146,7 @@ const MM_WOM_OPEN: u32 = 0x3BB;
 const MM_WOM_CLOSE: u32 = 0x3BC;
 const MM_WOM_DONE: u32 = 0x3BD;
 
-/// Entrega uma notificação conforme o tipo de callback pedido em waveOutOpen.
+/// Delivers a notification according to the callback type requested in waveOutOpen.
 fn notify(hwo: u32, msg: u32, p1: u32, p2: u32) {
     let Some((cb, inst, kind)) = WAVES.lock().unwrap().get(&hwo).map(|w| (w.callback, w.instance, w.kind)) else { return };
     match kind & 0x7_0000 {
@@ -176,7 +176,7 @@ unsafe extern "stdcall" fn waveOutGetDevCapsA(_dev: u32, caps: *mut u8, cb: u32)
     *(caps.add(4) as *mut u32) = 0x0100; // vDriverVersion
     let name = b"winlayer audio";
     std::ptr::copy_nonoverlapping(name.as_ptr(), caps.add(8), name.len());
-    *(caps.add(40) as *mut u32) = 0xFFF; // dwFormats: todos os formatos padrão
+    *(caps.add(40) as *mut u32) = 0xFFF; // dwFormats: all standard formats
     *(caps.add(44) as *mut u16) = 2; // wChannels
     *(caps.add(48) as *mut u32) = 0x0C; // WAVECAPS_VOLUME | WAVECAPS_LRVOLUME
     0
@@ -185,7 +185,7 @@ unsafe extern "stdcall" fn waveOutGetDevCapsA(_dev: u32, caps: *mut u8, cb: u32)
 #[allow(non_snake_case)]
 unsafe extern "stdcall" fn waveOutOpen(phwo: *mut u32, _dev: u32, fmt: *const u8, cb: u32, inst: u32, flags: u32) -> u32 {
     if flags & 1 != 0 {
-        return 0; // WAVE_FORMAT_QUERY: sim, suportamos
+        return 0; // WAVE_FORMAT_QUERY: yes, we support it
     }
     let mut n = NEXT_WAVE.lock().unwrap();
     let h = *n;
@@ -278,7 +278,7 @@ extern "stdcall" fn waveOutRestart(_hwo: u32) -> u32 {
 
 #[allow(non_snake_case)]
 unsafe extern "stdcall" fn waveOutGetPosition(_hwo: u32, mmt: *mut u32, _size: u32) -> u32 {
-    // MMTIME: wType + união; devolvemos posição 0 no tipo pedido
+    // MMTIME: wType + union; we return position 0 in the requested type
     *mmt.add(1) = 0;
     0
 }
@@ -296,7 +296,7 @@ extern "stdcall" fn waveOutSetVolume(_hwo: u32, _vol: u32) -> u32 {
     0
 }
 
-/// Chamada a cada ciclo de mensagens: conclui buffers de waveOut e dispara timeSetEvent.
+/// Called on every message cycle: completes waveOut buffers and fires timeSetEvent.
 pub fn poll() {
     let now = user32::now_ms();
     let done: Vec<Pending> = {
@@ -310,8 +310,8 @@ pub fn poll() {
     }
 }
 
-/// Dispara os temporizadores vencidos. Roda na thread própria dos temporizadores, como no Windows: o
-/// programa pode bloquear a thread principal esperando um evento que só o callback sinaliza.
+/// Fires expired timers. Runs on the timers' own thread, as on Windows: the
+/// program may block the main thread waiting for an event only the callback signals.
 fn fire_timers() {
     let now = user32::now_ms();
     let due: Vec<(u32, u32, u32)> = {
@@ -335,7 +335,7 @@ fn fire_timers() {
     }
 }
 
-// ---- MCI, joystick, MIDI, mmio: sem suporte (devolvem erro/“sem dispositivo”) -----------------
+// ---- MCI, joystick, MIDI, mmio: unsupported (return error/"no device") ------------------------
 
 #[allow(non_snake_case)]
 extern "stdcall" fn mciSendCommandA(_dev: u32, _msg: u32, _flags: u32, _param: u32) -> u32 {
@@ -400,7 +400,7 @@ extern "stdcall" fn midiOutLongMsg(_h: u32, _hdr: u32, _size: u32) -> u32 {
 
 #[allow(non_snake_case)]
 extern "stdcall" fn mmioOpenA(_name: u32, _info: u32, _flags: u32) -> u32 {
-    0 // falha ao abrir
+    0 // open failure
 }
 
 #[allow(non_snake_case)]
@@ -423,7 +423,7 @@ extern "stdcall" fn mmioClose(_h: u32, _flags: u32) -> u32 {
     0
 }
 
-// ---- dispositivos que não existem: MIDI, entrada de áudio, mixer, aux ------------------------
+// ---- devices that do not exist: MIDI, audio input, mixer, aux --------------------------------
 
 const MMSYSERR_BADDEVICEID: u32 = 2;
 const MMSYSERR_INVALHANDLE: u32 = 5;

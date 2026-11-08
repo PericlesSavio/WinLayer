@@ -1,10 +1,10 @@
-//! dsound.dll — DirectSound (IDirectSound, IDirectSoundBuffer) com mixer em software.
+//! dsound.dll — DirectSound (IDirectSound, IDirectSoundBuffer) with a software mixer.
 //!
-//! Cada buffer secundário é um bloco de PCM (8/16 bits, mono/estéreo, qualquer taxa) que o jogo
-//! preenche via `Lock`/`Unlock`. O mixer do `pulse.rs` chama `mix` a cada 10 ms: soma os buffers que
-//! estão tocando (com volume, pan e frequência) e avança o cursor de reprodução de cada um.
-//! Sem saída de áudio (modo captura, visualizador do navegador), os cursores avançam pelo relógio do
-//! programa, para que jogos que esperam o som andar não travem.
+//! Each secondary buffer is a PCM block (8/16-bit, mono/stereo, any rate) that the game
+//! fills via `Lock`/`Unlock`. The mixer in `pulse.rs` calls `mix` every 10 ms: it sums the buffers that
+//! are playing (with volume, pan and frequency) and advances the play cursor of each one.
+//! Without audio output (capture mode, browser viewer), the cursors advance by the program's
+//! clock, so that games waiting for the sound to progress do not hang.
 
 use super::{call4, user32};
 use std::cell::UnsafeCell;
@@ -29,15 +29,15 @@ const DSBSTATUS_LOOPING: u32 = 0x4;
 const DSBLOCK_FROMWRITECURSOR: u32 = 0x1;
 const DSBLOCK_ENTIREBUFFER: u32 = 0x2;
 
-/// Taxa de saída do mixer (a mesma do `pulse.rs`).
+/// Mixer output rate (same as `pulse.rs`).
 pub const OUT_RATE: u32 = 44_100;
 
 fn trace() -> bool {
     std::env::var_os("WINLAYER_DSOUND_TRACE").is_some()
 }
 
-/// Memória de PCM compartilhada entre o jogo (escreve via Lock) e o mixer (lê). As corridas entre os
-/// dois são as mesmas de uma placa de som real: o jogo escreve à frente do cursor de reprodução.
+/// PCM memory shared between the game (writes via Lock) and the mixer (reads). The races between the
+/// two are the same as on a real sound card: the game writes ahead of the play cursor.
 struct Pcm(UnsafeCell<Vec<u8>>);
 unsafe impl Sync for Pcm {}
 unsafe impl Send for Pcm {}
@@ -68,15 +68,15 @@ struct Buffer {
     pcm: Arc<Pcm>,
     fmt: Wfx,
     flags: u32,
-    /// 0 = frequência original do formato.
+    /// 0 = original frequency of the format.
     freq: u32,
-    /// Atenuação em centésimos de dB (0 = volume máximo, -10000 = silêncio).
+    /// Attenuation in hundredths of a dB (0 = full volume, -10000 = silence).
     volume: i32,
-    /// -10000 (só esquerda) .. 10000 (só direita).
+    /// -10000 (left only) .. 10000 (right only).
     pan: i32,
     playing: bool,
     looping: bool,
-    /// Posição de reprodução em quadros (fracionária por causa da conversão de taxa).
+    /// Play position in frames (fractional because of rate conversion).
     pos: f64,
     refs: u32,
     primary: bool,
@@ -95,13 +95,13 @@ impl Buffer {
 struct State {
     ds: u32,
     buffers: BTreeMap<u32, Buffer>,
-    /// Último instante (ms do programa) em que os cursores avançaram sem o mixer.
+    /// Last instant (program ms) at which the cursors advanced without the mixer.
     last_ms: u32,
 }
 
 static DS: Mutex<State> = Mutex::new(State { ds: 0, buffers: BTreeMap::new(), last_ms: 0 });
 
-/// O mixer do PulseAudio está rodando e chama `mix` (então ele é quem avança os cursores).
+/// The PulseAudio mixer is running and calling `mix` (so it is the one advancing the cursors).
 static MIXER_ON: AtomicBool = AtomicBool::new(false);
 
 pub fn set_mixer_on() {
@@ -144,7 +144,7 @@ unsafe fn read_wfx(p: u32) -> Option<Wfx> {
 
 // ---- mixer ------------------------------------------------------------------------------------
 
-/// Lê o quadro `f` como (esquerda, direita) em escala de 16 bits.
+/// Reads frame `f` as (left, right) on a 16-bit scale.
 fn sample(p: *const u8, fmt: Wfx, f: usize) -> (i32, i32) {
     unsafe {
         let o = f * fmt.align() as usize;
@@ -163,8 +163,8 @@ fn gain(db100: i32) -> f32 {
     if db100 <= -10000 { 0.0 } else { 10f32.powf(db100 as f32 / 2000.0) }
 }
 
-/// Soma `frames` quadros estéreo dos buffers tocando em `out` (intercalado E/D) e avança os cursores.
-/// Com `out == None` só avança.
+/// Sums `frames` stereo frames of the playing buffers into `out` (interleaved L/R) and advances the cursors.
+/// With `out == None` it only advances.
 fn run_mix(s: &mut State, mut out: Option<&mut [i32]>, frames: usize) {
     for b in s.buffers.values_mut() {
         if !b.playing || b.primary {
@@ -209,7 +209,7 @@ fn run_mix(s: &mut State, mut out: Option<&mut [i32]>, frames: usize) {
     }
 }
 
-/// Chamado pelo mixer do PulseAudio a cada bloco.
+/// Called by the PulseAudio mixer for each block.
 pub fn mix(out: &mut [i32], frames: usize) {
     let mut s = DS.lock().unwrap();
     if !s.buffers.is_empty() {
@@ -217,7 +217,7 @@ pub fn mix(out: &mut [i32], frames: usize) {
     }
 }
 
-/// Sem mixer, avança os cursores pelo relógio do programa.
+/// Without a mixer, advances the cursors by the program's clock.
 fn advance_by_clock(s: &mut State) {
     if MIXER_ON.load(Ordering::Relaxed) {
         return;
@@ -230,7 +230,7 @@ fn advance_by_clock(s: &mut State) {
     }
 }
 
-// ---- API exportada ------------------------------------------------------------------------
+// ---- exported API -------------------------------------------------------------------------
 
 #[allow(non_snake_case)]
 unsafe extern "stdcall" fn DirectSoundCreate(_guid: u32, out: *mut u32, _outer: u32) -> u32 {
@@ -310,7 +310,7 @@ unsafe extern "stdcall" fn ds_get_caps(_this: u32, caps: u32) -> u32 {
     }
     let size = rd(caps, 0).clamp(8, 96);
     std::ptr::write_bytes((caps + 4) as usize as *mut u8, 0, size as usize - 4);
-    // PRIMARYMONO|STEREO|8BIT|16BIT|CONTINUOUSRATE|EMULDRIVER(não)|SECONDARYMONO|STEREO|8BIT|16BIT
+    // PRIMARYMONO|STEREO|8BIT|16BIT|CONTINUOUSRATE|EMULDRIVER(no)|SECONDARYMONO|STEREO|8BIT|16BIT
     wr(caps, 4, 0x1 | 0x2 | 0x4 | 0x8 | 0x10 | 0x100 | 0x200 | 0x400 | 0x800);
     if size >= 16 {
         wr(caps, 8, 100); // dwMinSecondarySampleRate
@@ -344,7 +344,7 @@ unsafe extern "stdcall" fn ds_create_buffer(_this: u32, desc: u32, out: *mut u32
     } else {
         let Some(fmt) = fmt else {
             if trace() {
-                eprintln!("[dsound] CreateSoundBuffer: formato não suportado");
+                eprintln!("[dsound] CreateSoundBuffer: format not supported");
             }
             return DSERR_BADFORMAT;
         };
@@ -368,8 +368,8 @@ unsafe extern "stdcall" fn ds_create_buffer(_this: u32, desc: u32, out: *mut u32
     };
     if trace() {
         eprintln!(
-            "[dsound] CreateSoundBuffer {} {bytes} bytes {} Hz {} bits {} canal(is) -> {obj:#x}",
-            if buf.primary { "primário" } else { "secundário" },
+            "[dsound] CreateSoundBuffer {} {bytes} bytes {} Hz {} bits {} channel(s) -> {obj:#x}",
+            if buf.primary { "primary" } else { "secondary" },
             buf.fmt.rate,
             buf.fmt.bits,
             buf.fmt.ch
@@ -462,7 +462,7 @@ unsafe extern "stdcall" fn b_get_pos(this: u32, play: *mut u32, write: *mut u32)
     let Some(b) = s.buffers.get(&this) else { return DSERR_INVALIDCALL };
     let p = b.play_byte();
     let len = b.pcm.len().max(1) as u32;
-    // cursor de escrita ~15 ms à frente do de reprodução (como as placas da época)
+    // write cursor ~15 ms ahead of the play cursor (like the sound cards of the time)
     let rate = if b.freq != 0 { b.freq } else { b.fmt.rate };
     let ahead = if b.playing { (rate * 15 / 1000) * b.fmt.align() } else { 0 };
     if !play.is_null() {
@@ -572,7 +572,7 @@ extern "stdcall" fn b_play(this: u32, _r: u32, _prio: u32, flags: u32) -> u32 {
     b.playing = true;
     b.looping = flags & DSBPLAY_LOOPING != 0;
     if trace() {
-        eprintln!("[dsound] Play {this:#x} {}", if b.looping { "em laço" } else { "uma vez" });
+        eprintln!("[dsound] Play {this:#x} {}", if b.looping { "looping" } else { "once" });
     }
     DS_OK
 }
@@ -635,7 +635,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn mixa_mono_8_bits_e_para_no_fim() {
+    fn mixes_mono_8_bit_and_stops_at_end() {
         let fmt = Wfx { ch: 1, rate: OUT_RATE, bits: 8 };
         let mut st = State { ds: 0, buffers: BTreeMap::new(), last_ms: 0 };
         st.buffers.insert(1, Buffer {
@@ -646,12 +646,12 @@ mod tests {
         run_mix(&mut st, Some(&mut out), 6);
         assert_eq!(out[0], 127 << 8);
         assert_eq!(out[1], 127 << 8);
-        assert_eq!(out[8], 0); // quinto quadro: o buffer acabou
+        assert_eq!(out[8], 0); // fifth frame: the buffer has ended
         assert!(!st.buffers[&1].playing);
     }
 
     #[test]
-    fn pan_total_a_direita_silencia_a_esquerda() {
+    fn full_right_pan_silences_left() {
         assert_eq!(gain(-10000), 0.0);
         assert!((gain(0) - 1.0).abs() < 1e-6);
     }

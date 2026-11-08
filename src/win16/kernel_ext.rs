@@ -1,4 +1,4 @@
-//! KERNEL: recursos NE, arquivos DOS (_lopen...), módulos e outras APIs menores.
+//! KERNEL: NE resources, DOS files (_lopen...), modules and other minor APIs.
 
 use super::api::{Call, Impl};
 use super::kernel::{global_alloc, global_info};
@@ -12,19 +12,19 @@ fn pack(ax: u16, dx: u16) -> u32 {
     ax as u32 | (dx as u32) << 16
 }
 
-// ---- recursos -----------------------------------------------------------------------------
+// ---- resources -----------------------------------------------------------------------------
 
 static RES: Mutex<Option<(Vec<ResType>, Vec<u8>)>> = Mutex::new(None);
-/// Recursos localizados por FindResource: handle = índice + 1 -> (offset, tamanho).
+/// Resources located by FindResource: handle = index + 1 -> (offset, size).
 static FOUND: Mutex<Vec<(u32, u32)>> = Mutex::new(Vec::new());
-/// Handle de FindResource -> bloco global carregado por LoadResource.
+/// FindResource handle -> global block loaded by LoadResource.
 static LOADED: Mutex<BTreeMap<u16, u16>> = Mutex::new(BTreeMap::new());
 
 pub fn set_resources(types: Vec<ResType>, data: Vec<u8>) {
     *RES.lock().unwrap() = Some((types, data));
 }
 
-/// `seg:off` de um parâmetro LPCSTR -> chave de recurso (inteiro se o seletor é 0; "#n" vale inteiro).
+/// `seg:off` of an LPCSTR parameter -> resource key (integer if the selector is 0; "#n" counts as integer).
 pub fn key_of_far(raw: u32) -> ResKey {
     let (off, sel) = (raw as u16, (raw >> 16) as u16);
     if sel == 0 {
@@ -56,7 +56,7 @@ pub fn find_bytes(ty: &ResKey, name: &ResKey) -> Option<(u32, u32)> {
     t.entries.iter().find(|e| key_eq(&e.key, name)).map(|e| (e.off, e.len))
 }
 
-/// Bytes de um recurso NE.
+/// Bytes of an NE resource.
 pub fn resource_bytes(ty: &ResKey, name: &ResKey) -> Option<Vec<u8>> {
     let (off, len) = find_bytes(ty, name)?;
     let g = RES.lock().unwrap();
@@ -95,7 +95,7 @@ fn load_resource(c: &mut Call) -> u32 {
 }
 
 fn lock_resource(c: &mut Call) -> u32 {
-    pack(0, c.w(0)) // seletor:0
+    pack(0, c.w(0)) // selector:0
 }
 
 fn sizeof_resource(c: &mut Call) -> u32 {
@@ -106,7 +106,7 @@ fn free_resource(_c: &mut Call) -> u32 {
     0
 }
 
-// ---- arquivos DOS -------------------------------------------------------------------------
+// ---- DOS files ---------------------------------------------------------------------------
 
 static FILES: Mutex<BTreeMap<u16, File>> = Mutex::new(BTreeMap::new());
 const HFILE_ERROR: u32 = 0xFFFF;
@@ -114,7 +114,7 @@ const HFILE_ERROR: u32 = 0xFFFF;
 pub(super) fn open_file(path: &str, create: bool, mode: u16) -> u32 {
     let p = crate::win32::files::host_path(path);
     if std::env::var_os("WINLAYER_WIN16_TRACE").is_some() {
-        eprintln!("[win16] abrir {path:?} -> {p:?} (criar={create})");
+        eprintln!("[win16] open {path:?} -> {p:?} (create={create})");
     }
     let mut o = OpenOptions::new();
     if create {
@@ -150,7 +150,7 @@ fn lcreat(c: &mut Call) -> u32 {
     open_file(&path_arg(c, 0), true, 0)
 }
 
-/// INT 21h: fecha/posiciona arquivos pelos mesmos handles de `_lopen`.
+/// INT 21h: closes/seeks files through the same handles as `_lopen`.
 pub(super) fn dos_close(h: u16) -> bool {
     FILES.lock().unwrap().remove(&h).is_some()
 }
@@ -225,30 +225,30 @@ fn llseek(c: &mut Call) -> u32 {
         1 => SeekFrom::Current(off as i64),
         _ => SeekFrom::End(off as i64),
     };
-    f.seek(from).map_or(u32::MAX, |p| p as u32) // DX:AX = nova posição
+    f.seek(from).map_or(u32::MAX, |p| p as u32) // DX:AX = new position
 }
 
-// ---- módulos ------------------------------------------------------------------------------
+// ---- modules ------------------------------------------------------------------------------
 
 fn load_library(c: &mut Call) -> u32 {
     let name = path_arg(c, 0).to_uppercase();
     let stem = name.rsplit(['\\', '/']).next().unwrap_or("").trim_end_matches(".DLL").to_string();
     match stem.as_str() {
-        "COMMDLG" | "SHELL" | "VER" | "MMSYSTEM" | "TOOLHELP" | "LZEXPAND" | "KEYBOARD" | "SOUND" => 0x0100 + (stem.len() as u32), // handle simbólico (>= 32)
+        "COMMDLG" | "SHELL" | "VER" | "MMSYSTEM" | "TOOLHELP" | "LZEXPAND" | "KEYBOARD" | "SOUND" => 0x0100 + (stem.len() as u32), // symbolic handle (>= 32)
         _ => 2, // ERROR_FILE_NOT_FOUND
     }
 }
 
 // ---- MMSYSTEM / COMMDLG / WIN87EM ---------------------------------------------------------
 
-/// sndPlaySound(lpszSound, wFlags): o som sai pelo visualizador (ver `audio.rs`). Chamadas síncronas
-/// (SND_SYNC) não bloqueiam; o jogo continua enquanto o navegador toca.
+/// sndPlaySound(lpszSound, wFlags): the sound goes out through the viewer (see `audio.rs`). Synchronous
+/// calls (SND_SYNC) do not block; the game continues while the browser plays.
 fn snd_play_sound(c: &mut Call) -> u32 {
     let (name, flags) = (c.ptr(0), c.w(1) as u32);
     unsafe { crate::win32::winmm::play_sound(name, flags) }
 }
 
-/// OPENFILENAME de 16 bits: lStructSize(4) hwndOwner(2) hInstance(2) lpstrFilter(4) lpstrCustomFilter(4)
+/// 16-bit OPENFILENAME: lStructSize(4) hwndOwner(2) hInstance(2) lpstrFilter(4) lpstrCustomFilter(4)
 /// nMaxCustFilter(4) nFilterIndex(4) lpstrFile(4) nMaxFile(4) lpstrFileTitle(4) nMaxFileTitle(4)
 /// lpstrInitialDir(4) lpstrTitle(4) Flags(4) nFileOffset(2) nFileExtension(2) lpstrDefExt(4)
 fn get_file_name(c: &mut Call, save: bool) -> u32 {
@@ -266,7 +266,7 @@ fn get_file_name(c: &mut Call, save: bool) -> u32 {
         if file == 0 || max_file < 2 {
             return 0;
         }
-        // extensão do filtro escolhido: pares "descrição\0padrão\0" terminados por \0\0
+        // extension of the chosen filter: "description\0pattern\0" pairs terminated by \0\0
         let mut ext = String::new();
         let filter = far(8);
         if filter != 0 {
@@ -347,5 +347,5 @@ pub static IMPLS: &[Impl] = &[
     Impl { module: "COMMDLG", name: "ORD1", sig: "p", f: get_open_file_name },
     Impl { module: "COMMDLG", name: "ORD2", sig: "p", f: get_save_file_name },
     Impl { module: "COMMDLG", name: "ORD26", sig: "", f: zero },
-    Impl { module: "WIN87EM", name: "ORD1", sig: "", f: one },   // __FPMATH: há coprocessador real
+    Impl { module: "WIN87EM", name: "ORD1", sig: "", f: one },   // __FPMATH: a real coprocessor is present
 ];

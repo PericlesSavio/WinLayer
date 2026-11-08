@@ -1,4 +1,4 @@
-//! ole32.dll — só o que o runtime do VB4 usa na inicialização (IMalloc). O resto são stubs.
+//! ole32.dll — only what the VB4 runtime uses at initialization (IMalloc). The rest are stubs.
 
 use std::ffi::c_void;
 
@@ -43,7 +43,7 @@ extern "stdcall" fn heap_minimize(_this: u32) {}
 
 #[allow(non_snake_case)]
 unsafe extern "stdcall" fn CoGetMalloc(_ctx: u32, out: *mut u32) -> u32 {
-    // Objeto COM = ponteiro para tabela de funções; ambos vazam de propósito (vivem até o fim).
+    // COM object = pointer to a function table; both leak on purpose (they live until the end).
     let vtbl: &'static mut [u32; 9] = Box::leak(Box::new([
         qi as usize as u32, add_ref as usize as u32, release as usize as u32, alloc as usize as u32,
         realloc_ as usize as u32, free_ as usize as u32, get_size as usize as u32, did_alloc as usize as u32,
@@ -64,7 +64,7 @@ unsafe extern "stdcall" fn CoRegisterClassObject(_clsid: u32, _unk: u32, _ctx: u
     if !cookie.is_null() {
         *cookie = 1;
     }
-    0 // S_OK (a fábrica de classes não é guardada: nada ativa o servidor por fora)
+    0 // S_OK (the class factory is not kept: nothing activates the server from outside)
 }
 
 #[allow(non_snake_case)]

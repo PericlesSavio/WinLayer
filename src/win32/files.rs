@@ -1,8 +1,8 @@
-//! Arquivos do kernel32 com tradução de caminhos Windows -> Linux.
+//! kernel32 file functions with Windows -> Linux path translation.
 //!
-//! `C:\` (ou qualquer `X:\` e `\` iniciais) é a pasta do .exe; caminhos relativos partem do
-//! diretório atual (que começa na pasta do .exe). Nomes são resolvidos sem diferenciar
-//! maiúsculas de minúsculas, como no Windows.
+//! `C:\` (or any leading `X:\` and `\`) is the .exe's folder; relative paths start from the
+//! current directory (which starts at the .exe's folder). Names are resolved case-insensitively,
+//! as on Windows.
 
 use std::collections::BTreeMap;
 use std::fs::{File, OpenOptions};
@@ -39,7 +39,7 @@ pub fn resolve(name: &str) -> Option<usize> {
     )
 }
 
-/// Converte um caminho do Windows no caminho real do host.
+/// Converts a Windows path to the real host path.
 pub fn host_path(win: &str) -> PathBuf {
     let mut s = win.replace('\\', "/");
     let mut rooted = false;
@@ -85,7 +85,7 @@ pub fn file_info(h: u32) -> Option<(u64, bool)> {
     TABLE.lock().unwrap().get(&h).and_then(|f| f.metadata().ok()).map(|m| (m.len(), m.is_dir()))
 }
 
-/// Lê até `n` bytes de um handle de arquivo; devolve false se o handle for inválido.
+/// Reads up to `n` bytes from a file handle; returns false if the handle is invalid.
 pub unsafe fn read_file(h: u32, buf: *mut u8, n: u32, got: &mut u32) -> bool {
     ReadFile(h, buf, n, got, 0) != 0
 }
@@ -162,8 +162,8 @@ pub unsafe extern "stdcall" fn SetFilePointer(h: u32, lo: i32, hi: *mut i32, met
         return u32::MAX;
     };
     let off = if hi.is_null() { lo as i64 } else { ((*hi as i64) << 32) | (lo as u32 as i64) };
-    // Posição de destino calculada antes: antes do início do arquivo é ERROR_NEGATIVE_SEEK (o runtime do
-    // MSVC conta com esse código ao abrir em modo texto/append um arquivo vazio).
+    // Target position computed first: before the start of the file is ERROR_NEGATIVE_SEEK (the MSVC
+    // runtime relies on this code when opening an empty file in text/append mode).
     let base = match method {
         0 => 0,
         1 => f.stream_position().map(|p| p as i64).unwrap_or(0),
@@ -216,7 +216,7 @@ pub unsafe extern "stdcall" fn GetFileAttributesA(name: *const i8) -> u32 {
 
 unsafe fn put_cstr(buf: *mut u8, max: u32, s: &[u8]) -> u32 {
     if buf.is_null() || max == 0 {
-        return s.len() as u32 + 1; // tamanho necessário
+        return s.len() as u32 + 1; // required size
     }
     let n = s.len().min(max as usize - 1);
     std::ptr::copy_nonoverlapping(s.as_ptr(), buf, n);
@@ -259,7 +259,7 @@ unsafe extern "stdcall" fn GetTempPathA(max: u32, buf: *mut u8) -> u32 {
     put_cstr(buf, max, b"C:\\TEMP\\")
 }
 
-// INI: ainda sem leitura/escrita de verdade; devolve o valor padrão.
+// INI: no real reading/writing yet; returns the default value.
 #[allow(non_snake_case)]
 unsafe extern "stdcall" fn GetPrivateProfileIntA(_sec: u32, _key: u32, default: i32, _file: u32) -> i32 {
     default
@@ -276,7 +276,7 @@ extern "stdcall" fn WritePrivateProfileStringA(_sec: u32, _key: u32, _val: u32, 
     1
 }
 
-// ---- busca de arquivos --------------------------------------------------------------------
+// ---- file search --------------------------------------------------------------------------
 
 struct Find {
     entries: Vec<std::fs::DirEntry>,
@@ -285,7 +285,7 @@ struct Find {
 
 static FINDS: Mutex<BTreeMap<u32, Find>> = Mutex::new(BTreeMap::new());
 
-/// Casamento com curingas `*` e `?`, sem diferenciar maiúsculas de minúsculas.
+/// Matching with `*` and `?` wildcards, case-insensitive.
 fn wild(pat: &[u8], s: &[u8]) -> bool {
     match (pat.first(), s.first()) {
         (None, None) => true,
@@ -300,7 +300,7 @@ unsafe fn fill_find_data(out: *mut u8, e: &std::fs::DirEntry) {
     std::ptr::write_bytes(out, 0, 320);
     let Ok(m) = e.metadata() else { return };
     *(out as *mut u32) = if m.is_dir() { 0x10 } else { 0x80 };
-    // FILETIME: 100 ns desde 1601
+    // FILETIME: 100 ns since 1601
     let ft = m.modified().ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map_or(0, |d| {
         d.as_secs() * 10_000_000 + 116_444_736_000_000_000
     });
@@ -361,7 +361,7 @@ extern "stdcall" fn FindClose(h: u32) -> i32 {
 
 #[allow(non_snake_case)]
 extern "stdcall" fn GetLogicalDrives() -> u32 {
-    0x4 // só C:
+    0x4 // C: only
 }
 
 #[allow(non_snake_case)]
@@ -371,14 +371,14 @@ pub extern "stdcall" fn GetDriveTypeA(_root: u32) -> u32 {
 
 #[allow(non_snake_case)]
 unsafe extern "stdcall" fn FileTimeToLocalFileTime(src: *const u64, dst: *mut u64) -> i32 {
-    *dst = *src; // sem fuso horário
+    *dst = *src; // no time zone
     1
 }
 
 #[allow(non_snake_case)]
 unsafe extern "stdcall" fn FileTimeToSystemTime(ft: *const u64, st: *mut u16) -> i32 {
     let total = *ft;
-    let secs = (total / 10_000_000) as i64 - 11_644_473_600; // desde 1970
+    let secs = (total / 10_000_000) as i64 - 11_644_473_600; // since 1970
     let ms = (total / 10_000 % 1000) as u16;
     let (days, rem) = (secs.div_euclid(86400), secs.rem_euclid(86400));
     let z = days + 719468;
@@ -460,15 +460,15 @@ unsafe extern "stdcall" fn lstrcmpiA(a: *const i8, b: *const i8) -> i32 {
     cmp(std::ffi::CStr::from_ptr(a).to_bytes(), std::ffi::CStr::from_ptr(b).to_bytes(), true)
 }
 
-// ---- mapeamento de arquivos ---------------------------------------------------------------
+// ---- file mapping -------------------------------------------------------------------------
 
-/// Objeto de mapeamento: conteúdo lido na criação (cópia; escritas na visão não voltam ao arquivo).
+/// Mapping object: contents read at creation (a copy; writes to the view do not go back to the file).
 struct Mapping {
     data: Vec<u8>,
 }
 
 static MAPPINGS: Mutex<BTreeMap<u32, Mapping>> = Mutex::new(BTreeMap::new());
-/// Visões ativas: endereço -> tamanho (para o munmap).
+/// Active views: address -> size (for munmap).
 static VIEWS: Mutex<BTreeMap<u32, usize>> = Mutex::new(BTreeMap::new());
 
 extern "C" {
@@ -481,7 +481,7 @@ extern "stdcall" fn CreateFileMappingA(file: u32, _attr: u32, _protect: u32, siz
     use std::os::unix::fs::FileExt;
     let want = ((size_hi as u64) << 32 | size_lo as u64) as usize;
     let data = if file == INVALID_HANDLE {
-        vec![0u8; want] // memória anônima (compartilhada só de nome)
+        vec![0u8; want] // anonymous memory (shared in name only)
     } else {
         let t = TABLE.lock().unwrap();
         let Some(f) = t.get(&file) else {

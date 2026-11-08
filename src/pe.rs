@@ -1,4 +1,4 @@
-//! Parser mínimo de PE32 (executáveis Win32 de 32 bits).
+//! Minimal parser for PE32 (32-bit Win32 executables).
 
 use std::fmt;
 
@@ -7,7 +7,7 @@ pub const IMAGE_FILE_DLL: u16 = 0x2000;
 #[derive(Debug)]
 pub enum PeError {
     Truncated,
-    /// Começa com "MZ" mas não tem cabeçalho PE (DOS puro) ou tem NE/LE (Win16).
+    /// Starts with "MZ" but has no PE header (plain DOS) or has NE/LE (Win16).
     NotPe(&'static str),
     Unsupported(&'static str),
 }
@@ -15,9 +15,9 @@ pub enum PeError {
 impl fmt::Display for PeError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            PeError::Truncated => write!(f, "arquivo truncado"),
-            PeError::NotPe(s) => write!(f, "não é um PE32: {s}"),
-            PeError::Unsupported(s) => write!(f, "não suportado: {s}"),
+            PeError::Truncated => write!(f, "truncated file"),
+            PeError::NotPe(s) => write!(f, "not a PE32: {s}"),
+            PeError::Unsupported(s) => write!(f, "unsupported: {s}"),
         }
     }
 }
@@ -32,7 +32,7 @@ pub struct Section {
 
 pub struct Import {
     pub dll: String,
-    /// RVA da IAT deste DLL (cada entrada: 4 bytes).
+    /// RVA of this DLL's IAT (each entry: 4 bytes).
     pub iat_rva: u32,
     pub names: Vec<ImportName>,
 }
@@ -62,7 +62,7 @@ fn u32_at(d: &[u8], o: usize) -> Result<u32, PeError> {
     d.get(o..o + 4).map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]])).ok_or(PeError::Truncated)
 }
 
-/// Lê string C terminada em NUL.
+/// Reads a NUL-terminated C string.
 fn cstr_at(d: &[u8], o: usize) -> Result<String, PeError> {
     let s = d.get(o..).ok_or(PeError::Truncated)?;
     let n = s.iter().position(|&b| b == 0).ok_or(PeError::Truncated)?;
@@ -72,24 +72,24 @@ fn cstr_at(d: &[u8], o: usize) -> Result<String, PeError> {
 impl Pe32 {
     pub fn parse(d: &[u8]) -> Result<Pe32, PeError> {
         if d.get(0..2) != Some(b"MZ") {
-            return Err(PeError::NotPe("sem assinatura MZ"));
+            return Err(PeError::NotPe("no MZ signature"));
         }
         let lfanew = u32_at(d, 0x3c)? as usize;
-        // DOS puro (como o Civilization 1): e_lfanew zero/fora do arquivo.
+        // Plain DOS (like Civilization 1): e_lfanew zero/outside the file.
         if lfanew == 0 || lfanew + 4 > d.len() {
-            return Err(PeError::NotPe("executável DOS puro (precisa de DOSBox, não de Win32)"));
+            return Err(PeError::NotPe("plain DOS executable (needs DOSBox, not Win32)"));
         }
         match d.get(lfanew..lfanew + 2) {
             Some(b"PE") if d[lfanew + 2] == 0 && d[lfanew + 3] == 0 => {}
-            Some(b"NE") => return Err(PeError::Unsupported("Win16 (NE), ainda não implementado")),
+            Some(b"NE") => return Err(PeError::Unsupported("Win16 (NE), not implemented yet")),
             Some(b"LE") | Some(b"LX") => return Err(PeError::Unsupported("VxD/DOS extender (LE)")),
-            _ => return Err(PeError::NotPe("assinatura PE ausente")),
+            _ => return Err(PeError::NotPe("missing PE signature")),
         }
 
         let coff = lfanew + 4;
         let machine = u16_at(d, coff)?;
         if machine != 0x014c {
-            return Err(PeError::Unsupported("máquina diferente de i386"));
+            return Err(PeError::Unsupported("machine other than i386"));
         }
         let nsections = u16_at(d, coff + 2)? as usize;
         let opt_size = u16_at(d, coff + 16)? as usize;
@@ -97,7 +97,7 @@ impl Pe32 {
 
         let opt = coff + 20;
         if u16_at(d, opt)? != 0x010b {
-            return Err(PeError::Unsupported("não é PE32 (talvez PE32+)"));
+            return Err(PeError::Unsupported("not PE32 (maybe PE32+)"));
         }
         let entry_rva = u32_at(d, opt + 16)?;
         let image_base = u32_at(d, opt + 28)?;
@@ -136,7 +136,7 @@ impl Pe32 {
         Ok(pe)
     }
 
-    /// Converte RVA em offset no arquivo.
+    /// Converts an RVA to a file offset.
     pub fn rva_to_offset(&self, rva: u32) -> Option<usize> {
         if rva < self.size_of_headers {
             return Some(rva as usize);
@@ -162,7 +162,7 @@ impl Pe32 {
                 break;
             }
             let dll = cstr_at(d, self.rva_to_offset(name_rva).ok_or(PeError::Truncated)?)?;
-            // Sem OriginalFirstThunk (ILT = 0), o linker usa a própria IAT.
+            // Without OriginalFirstThunk (ILT = 0), the linker uses the IAT itself.
             let mut t = self.rva_to_offset(if ilt != 0 { ilt } else { iat }).ok_or(PeError::Truncated)?;
             let mut names = Vec::new();
             loop {
@@ -173,7 +173,7 @@ impl Pe32 {
                 names.push(if v & 0x8000_0000 != 0 {
                     ImportName::Ordinal(v as u16)
                 } else {
-                    let off = self.rva_to_offset(v).ok_or(PeError::Truncated)? + 2; // pula o hint
+                    let off = self.rva_to_offset(v).ok_or(PeError::Truncated)? + 2; // skips the hint
                     ImportName::Name(cstr_at(d, off)?)
                 });
                 t += 4;

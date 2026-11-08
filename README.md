@@ -5,7 +5,7 @@ Windows: game code runs directly on the CPU, and calls to the Windows API are ha
 
 It ships as a single statically linked 32-bit executable of about 2.4 MB, with no libraries to install.
 
-**Version 0.0.2**, early development. It covers what the tested games use, not Windows as a whole. See
+**Version 0.0.3**, early development. It covers what the tested games use, not Windows as a whole. See
 [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md) for per-game results.
 
 ## Features
@@ -66,7 +66,7 @@ winlayer --x11 /path/to/game/GAME.EXE
 
 ### Play time
 
-Time is stored in `~/.local/share/winlayer/tempo-de-jogo.log`, an append-only text file written when a game opens, every
+Time is stored in `~/.local/share/winlayer/playtime.log`, an append-only text file written when a game opens, every
 minute and on exit. After a crash, at most the last minute is lost. It counts the time a game stays open, and capture
 mode is not counted.
 

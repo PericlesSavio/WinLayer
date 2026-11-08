@@ -1,17 +1,17 @@
-//! Recursos do PE (`.rsrc`) lidos direto da imagem já mapeada na memória.
+//! PE resources (`.rsrc`) read directly from the image already mapped in memory.
 
 pub const RT_MENU: u32 = 4;
 pub const RT_DIALOG: u32 = 5;
 pub const RT_STRING: u32 = 6;
 pub const RT_ACCELERATOR: u32 = 9;
 
-/// Identificador de recurso: número (MAKEINTRESOURCE) ou nome.
+/// Resource identifier: number (MAKEINTRESOURCE) or name.
 pub enum ResId {
     Id(u32),
     Name(String),
 }
 
-/// Interpreta o argumento `LPCSTR` de FindResource/LoadString etc.
+/// Interprets the `LPCSTR` argument of FindResource/LoadString etc.
 pub unsafe fn res_id(p: u32) -> ResId {
     if p < 0x10000 {
         return ResId::Id(p);
@@ -30,7 +30,7 @@ unsafe fn u32_at(a: u32) -> u32 {
     *(a as usize as *const u32)
 }
 
-/// Procura `id` num diretório de recursos; devolve o campo `OffsetToData` da entrada.
+/// Looks up `id` in a resource directory; returns the entry's `OffsetToData` field.
 unsafe fn lookup(root: u32, dir_off: u32, id: Option<&ResId>) -> Option<u32> {
     let dir = root + dir_off;
     let (named, ids) = (u16_at(dir + 12), u16_at(dir + 14));
@@ -39,7 +39,7 @@ unsafe fn lookup(root: u32, dir_off: u32, id: Option<&ResId>) -> Option<u32> {
         let e = entries + i * 8;
         let (name, off) = (u32_at(e), u32_at(e + 4));
         let hit = match id {
-            None => true, // qualquer entrada (idioma)
+            None => true, // any entry (language)
             Some(ResId::Id(n)) => i >= named && name == *n,
             Some(ResId::Name(s)) => i < named && {
                 let p = root + (name & 0x7FFF_FFFF);
@@ -55,12 +55,12 @@ unsafe fn lookup(root: u32, dir_off: u32, id: Option<&ResId>) -> Option<u32> {
     None
 }
 
-/// Localiza um recurso; devolve (endereço do IMAGE_RESOURCE_DATA_ENTRY, endereço dos dados, tamanho).
+/// Locates a resource; returns (IMAGE_RESOURCE_DATA_ENTRY address, data address, size).
 pub unsafe fn find(base: u32, ty: &ResId, name: &ResId) -> Option<(u32, u32, u32)> {
     if base == 0 {
         return None;
     }
-    // Diretório de recursos lido dos cabeçalhos do próprio módulo (exe ou DLL).
+    // Resource directory read from the module's own headers (exe or DLL).
     let lfanew = u32_at(base + 0x3C);
     let rva = u32_at(base + lfanew + 24 + 96 + 16);
     if rva == 0 {
@@ -76,7 +76,7 @@ pub unsafe fn find(base: u32, ty: &ResId, name: &ResId) -> Option<(u32, u32, u32
     Some((entry, base + u32_at(entry), u32_at(entry + 4)))
 }
 
-/// Lê string UTF-16 terminada em NUL em `p`; devolve (texto, endereço seguinte).
+/// Reads a NUL-terminated UTF-16 string at `p`; returns (text, next address).
 pub unsafe fn wide_z(p: u32) -> (String, u32) {
     let mut chars = Vec::new();
     let mut q = p;

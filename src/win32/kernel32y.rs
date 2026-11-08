@@ -1,4 +1,4 @@
-//! kernel32: heaps, locale/strings, versão, tempo e I/O legado (`_l*`) usados pelo runtime C.
+//! kernel32: heaps, locale/strings, version, time and legacy I/O (`_l*`) used by the C runtime.
 
 use std::ffi::c_void;
 
@@ -20,7 +20,7 @@ extern "C" {
     fn malloc_usable_size(p: *mut c_void) -> usize;
 }
 
-// ---- heaps (todos compartilham o malloc do processo) ---------------------------------------
+// ---- heaps (all share the process malloc) --------------------------------------------------
 
 const HEAP_HANDLE: u32 = 0x6000_0004;
 
@@ -75,7 +75,7 @@ extern "stdcall" fn MulDiv(a: i32, b: i32, c: i32) -> i32 {
     if c == 0 { -1 } else { ((a as i64 * b as i64 + c as i64 / 2) / c as i64) as i32 }
 }
 
-// ---- linha de comando / ambiente em UTF-16 ------------------------------------------------
+// ---- UTF-16 command line / environment ----------------------------------------------------
 
 fn leak_wide(bytes: &[u8]) -> u32 {
     let mut v: Vec<u16> = bytes.iter().map(|&b| b as u16).collect();
@@ -95,7 +95,7 @@ extern "stdcall" fn GetEnvironmentStringsW() -> u32 {
     leak_wide(b"")
 }
 
-// ---- classificação, mapeamento e comparação de strings -------------------------------------
+// ---- string classification, mapping and comparison -----------------------------------------
 
 fn ctype1(c: u32) -> u16 {
     let ch = char::from_u32(c).unwrap_or('\0');
@@ -206,7 +206,7 @@ unsafe extern "stdcall" fn CompareStringW(_l: u32, flags: u32, a: *const u16, na
     cmp_result(&rd(a, na), &rd(b, nb), flags & 1 != 0)
 }
 
-// ---- sistema, tempo, módulos --------------------------------------------------------------
+// ---- system, time, modules ----------------------------------------------------------------
 
 #[allow(non_snake_case)]
 unsafe extern "stdcall" fn GetVersionExA(info: *mut u32) -> i32 {
@@ -237,7 +237,7 @@ unsafe extern "stdcall" fn GetSystemDirectoryA(buf: *mut u8, max: u32) -> u32 {
 
 #[allow(non_snake_case)]
 unsafe extern "stdcall" fn GetSystemTime(st: *mut u16) {
-    super::kernel32::get_local_time(st); // sem fuso horário, local == UTC
+    super::kernel32::get_local_time(st); // no time zone, local == UTC
 }
 
 #[allow(non_snake_case)]
@@ -261,10 +261,10 @@ unsafe extern "stdcall" fn VirtualProtect(_addr: u32, _size: u32, _new: u32, old
     if !old.is_null() {
         *old = 4; // PAGE_READWRITE
     }
-    1 // a memória já é RWX
+    1 // the memory is already RWX
 }
 
-// ---- I/O legado (_lread etc.) -------------------------------------------------------------
+// ---- legacy I/O (_lread etc.) -------------------------------------------------------------
 
 #[allow(non_snake_case)]
 unsafe extern "stdcall" fn _lread(h: u32, buf: *mut u8, n: u32) -> u32 {

@@ -1,5 +1,5 @@
-//! kernel32.dll — o necessário para o startup do CRT do MSVC e programas simples.
-//! Em i686, `extern "stdcall"` limpa a pilha no chamado: o chamado limpa a pilha.
+//! kernel32.dll — what the MSVC CRT startup and simple programs need.
+//! On i686, `extern "stdcall"` means callee cleanup: the callee cleans the stack.
 
 use std::collections::BTreeMap;
 use std::ffi::{c_void, CString};
@@ -7,13 +7,13 @@ use std::io::Write;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Mutex, OnceLock};
 
-// ---- estado global do "processo Windows" -------------------------------------------------
+// ---- global state of the "Windows process" -----------------------------------------------
 
 static IMAGE_BASE: AtomicU32 = AtomicU32::new(0);
 static LAST_ERROR: AtomicU32 = AtomicU32::new(0);
 static MODULE_PATH: OnceLock<CString> = OnceLock::new();
 static COMMAND_LINE: OnceLock<CString> = OnceLock::new();
-/// Regiões entregues por VirtualAlloc: início -> tamanho.
+/// Regions handed out by VirtualAlloc: start -> size.
 static REGIONS: Mutex<BTreeMap<usize, usize>> = Mutex::new(BTreeMap::new());
 
 pub fn image_base() -> u32 {
@@ -28,7 +28,7 @@ pub fn command_line() -> &'static std::ffi::CStr {
     COMMAND_LINE.get().map_or(c"", |c| c.as_c_str())
 }
 
-/// Região entregue por VirtualAlloc que contém `addr`: (início, tamanho).
+/// Region handed out by VirtualAlloc that contains `addr`: (start, size).
 pub fn region_of(addr: usize) -> Option<(usize, usize)> {
     let r = REGIONS.lock().unwrap();
     r.range(..=addr).next_back().filter(|(&s, &l)| addr < s + l).map(|(&s, &l)| (s, l))
@@ -44,7 +44,7 @@ pub fn init(path: &str, args: &[String]) {
     let name = abs.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
     super::files::set_root(dir.clone());
     let _ = std::env::set_current_dir(&dir);
-    // Visto pelo programa, o diretório do .exe é C:\
+    // As seen by the program, the .exe's directory is C:\
     let win_path = format!("C:\\{name}");
     let _ = MODULE_PATH.set(CString::new(win_path.clone()).unwrap_or_default());
     let mut cmd = format!("\"{win_path}\"");
@@ -59,13 +59,13 @@ fn set_error(e: u32) {
     LAST_ERROR.store(e, Ordering::Relaxed);
 }
 
-// ---- constantes ---------------------------------------------------------------------------
+// ---- constants ----------------------------------------------------------------------------
 
 const STD_INPUT_HANDLE: u32 = -10i32 as u32;
 const STD_OUTPUT_HANDLE: u32 = -11i32 as u32;
 const STD_ERROR_HANDLE: u32 = -12i32 as u32;
 
-// HANDLEs fictícios; só valem para os handles padrão por enquanto.
+// Fake HANDLEs; only valid for the standard handles for now.
 const H_STDIN: usize = 0x10;
 const H_STDOUT: usize = 0x11;
 const H_STDERR: usize = 0x12;
@@ -87,7 +87,7 @@ extern "C" {
     fn munmap(addr: *mut c_void, len: usize) -> i32;
 }
 
-// ---- tabela de exports --------------------------------------------------------------------
+// ---- export table -------------------------------------------------------------------------
 
 pub fn resolve(name: &str) -> Option<usize> {
     exports!(
@@ -109,7 +109,7 @@ pub fn exit_process(code: u32) -> ! {
     std::process::exit(code as i32)
 }
 
-/// Copia `s` + NUL para `buf` (até `size` bytes); devolve quantos bytes sem o NUL.
+/// Copies `s` + NUL to `buf` (up to `size` bytes); returns how many bytes excluding the NUL.
 unsafe fn write_cstr(buf: *mut u8, size: u32, s: &[u8]) -> u32 {
     if buf.is_null() || size == 0 {
         return 0;
@@ -120,7 +120,7 @@ unsafe fn write_cstr(buf: *mut u8, size: u32, s: &[u8]) -> u32 {
     n as u32
 }
 
-// ---- processo / ambiente ------------------------------------------------------------------
+// ---- process / environment ----------------------------------------------------------------
 
 #[allow(non_snake_case)]
 extern "stdcall" fn ExitProcess(code: u32) -> ! {
@@ -139,7 +139,7 @@ extern "stdcall" fn GetLastError() -> u32 {
 
 #[allow(non_snake_case)]
 unsafe extern "stdcall" fn GetModuleHandleA(name: *const i8) -> u32 {
-    // NULL = o próprio executável.
+    // NULL = the executable itself.
     if name.is_null() {
         return IMAGE_BASE.load(Ordering::Relaxed);
     }
@@ -153,7 +153,7 @@ unsafe extern "stdcall" fn GetModuleFileNameA(module: u32, buf: *mut u8, size: u
 
 pub unsafe fn get_module_file_name(module: u32, buf: *mut u8, size: u32) -> u32 {
     if module == 0 || module == IMAGE_BASE.load(Ordering::Relaxed) {
-        // TODO: converter para caminho estilo DOS (C:\...) quando houver mapeamento de drives.
+        // TODO: convert to a DOS-style path (C:\...) once there is drive mapping.
         return write_cstr(buf, size, MODULE_PATH.get().map_or(&[][..], |c| c.to_bytes()));
     }
     match super::modules::module_file_name(module) {
@@ -169,14 +169,14 @@ pub extern "stdcall" fn GetCommandLineA() -> *const u8 {
 
 #[allow(non_snake_case)]
 unsafe extern "stdcall" fn GetStartupInfoA(si: *mut u8) {
-    // STARTUPINFOA tem 68 bytes; só `cb` é preenchido.
+    // STARTUPINFOA is 68 bytes; only `cb` is filled in.
     std::ptr::write_bytes(si, 0, 68);
     *(si as *mut u32) = 68;
 }
 
 #[allow(non_snake_case)]
 extern "stdcall" fn GetEnvironmentStrings() -> *const u8 {
-    b"\0\0".as_ptr() // bloco de ambiente vazio
+    b"\0\0".as_ptr() // empty environment block
 }
 
 #[allow(non_snake_case)]
@@ -191,7 +191,7 @@ extern "stdcall" fn GetOEMCP() -> u32 {
 
 #[allow(non_snake_case)]
 unsafe extern "stdcall" fn GetCPInfo(_cp: u32, info: *mut u8) -> i32 {
-    // CPINFO: MaxCharSize(4) DefaultChar[2] LeadByte[12]. Página single-byte.
+    // CPINFO: MaxCharSize(4) DefaultChar[2] LeadByte[12]. Single-byte code page.
     std::ptr::write_bytes(info, 0, 18);
     *(info as *mut u32) = 1;
     *info.add(4) = b'?';
@@ -205,7 +205,7 @@ unsafe extern "stdcall" fn GetWindowsDirectoryA(buf: *mut u8, size: u32) -> u32 
 
 #[allow(non_snake_case)]
 extern "stdcall" fn WinExec(_cmd: *const i8, _show: u32) -> u32 {
-    2 // <= 31 indica erro (ERROR_FILE_NOT_FOUND)
+    2 // <= 31 indicates an error (ERROR_FILE_NOT_FOUND)
 }
 
 #[allow(non_snake_case)]
@@ -216,7 +216,7 @@ extern "stdcall" fn UnhandledExceptionFilter(_info: usize) -> i32 {
     1 // EXCEPTION_EXECUTE_HANDLER
 }
 
-// ---- handles e arquivos -------------------------------------------------------------------
+// ---- handles and files --------------------------------------------------------------------
 
 #[allow(non_snake_case)]
 extern "stdcall" fn GetStdHandle(n: u32) -> usize {
@@ -284,7 +284,7 @@ pub unsafe fn write_file_raw(handle: usize, buf: *const u8, len: u32, written: *
     ok as i32
 }
 
-// ---- memória ------------------------------------------------------------------------------
+// ---- memory -------------------------------------------------------------------------------
 
 #[allow(non_snake_case)]
 extern "stdcall" fn VirtualAlloc(addr: usize, size: usize, _kind: u32, _protect: u32) -> usize {
@@ -294,7 +294,7 @@ extern "stdcall" fn VirtualAlloc(addr: usize, size: usize, _kind: u32, _protect:
     const MAP_FIXED_NOREPLACE: i32 = 0x10_0000;
 
     let mut regions = REGIONS.lock().unwrap();
-    // Commit dentro de uma região que já reservamos: o mmap anônimo já é utilizável.
+    // Commit inside a region we already reserved: the anonymous mmap is already usable.
     if addr != 0 {
         if let Some((&start, &len)) = regions.range(..=addr).next_back() {
             if addr >= start && addr + size <= start + len {
@@ -320,10 +320,10 @@ extern "stdcall" fn VirtualFree(addr: usize, _size: usize, kind: u32) -> i32 {
             unsafe { munmap(addr as *mut c_void, len) };
         }
     }
-    1 // MEM_DECOMMIT: sem efeito por enquanto
+    1 // MEM_DECOMMIT: no effect for now
 }
 
-// ---- texto --------------------------------------------------------------------------------
+// ---- text ---------------------------------------------------------------------------------
 
 #[allow(non_snake_case)]
 unsafe extern "stdcall" fn WideCharToMultiByte(
@@ -336,11 +336,11 @@ unsafe extern "stdcall" fn WideCharToMultiByte(
     _default: *const i8,
     _used_default: *mut i32,
 ) -> i32 {
-    // Conversão simplificada: cada unidade UTF-16 vira um byte (Latin-1; '?' fora disso).
+    // Simplified conversion: each UTF-16 unit becomes one byte (Latin-1; '?' otherwise).
     let n = if wlen < 0 {
         let mut i = 0;
         while *wide.add(i) != 0 { i += 1; }
-        i + 1 // inclui o NUL
+        i + 1 // includes the NUL
     } else {
         wlen as usize
     };
@@ -357,7 +357,7 @@ unsafe extern "stdcall" fn WideCharToMultiByte(
     n as i32
 }
 
-// ---- módulos, memória local, arquivos -----------------------------------------------------
+// ---- modules, local memory, files ---------------------------------------------------------
 
 const ERROR_MOD_NOT_FOUND: u32 = 126;
 const ERROR_PROC_NOT_FOUND: u32 = 127;
@@ -384,7 +384,7 @@ unsafe extern "stdcall" fn GetProcAddress(module: u32, name: u32) -> u32 {
     let p = if name < 0x10000 {
         Proc::Ordinal(name)
     } else {
-        // `to_string_lossy` pede emprestado: guardamos a String viva durante a chamada.
+        // `to_string_lossy` borrows: we keep the String alive during the call.
         let s = std::ffi::CStr::from_ptr(name as usize as *const i8).to_string_lossy().into_owned();
         return get_proc(module, Proc::Name(&s)).unwrap_or_else(|| {
             set_error(ERROR_PROC_NOT_FOUND);
@@ -399,7 +399,7 @@ unsafe extern "stdcall" fn GetProcAddress(module: u32, name: u32) -> u32 {
 
 #[allow(non_snake_case)]
 extern "stdcall" fn LocalAlloc(_flags: u32, bytes: usize) -> *mut c_void {
-    // Memória sempre zerada (superconjunto de LMEM_ZEROINIT).
+    // Memory is always zeroed (superset of LMEM_ZEROINIT).
     unsafe { calloc(1, bytes.max(1)) }
 }
 
@@ -410,7 +410,7 @@ unsafe extern "stdcall" fn DeleteFileA(path: *const i8) -> i32 {
     (unlink(c.as_ptr()) == 0) as i32
 }
 
-// ---- recursos -----------------------------------------------------------------------------
+// ---- resources ----------------------------------------------------------------------------
 
 #[allow(non_snake_case)]
 unsafe extern "stdcall" fn FindResourceA(module: u32, name: u32, ty: u32) -> u32 {
@@ -435,7 +435,7 @@ unsafe extern "stdcall" fn SizeofResource(_module: u32, info: u32) -> u32 {
     if info == 0 { 0 } else { *((info + 4) as usize as *const u32) }
 }
 
-// ---- ambiente, hora, texto ----------------------------------------------------------------
+// ---- environment, time, text --------------------------------------------------------------
 
 #[allow(non_snake_case)]
 extern "stdcall" fn SetEnvironmentVariableA(_name: u32, _value: u32) -> i32 {
@@ -448,10 +448,10 @@ unsafe extern "stdcall" fn GetLocalTime(st: *mut u16) {
 }
 
 pub unsafe fn get_local_time(st: *mut u16) {
-    // SYSTEMTIME: year, month, dow, day, hour, minute, second, ms (UTC por enquanto).
+    // SYSTEMTIME: year, month, dow, day, hour, minute, second, ms (UTC for now).
     let secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs()) as i64;
     let (days, rem) = (secs.div_euclid(86400), secs.rem_euclid(86400));
-    // dias -> data civil (algoritmo de Howard Hinnant)
+    // days -> civil date (Howard Hinnant's algorithm)
     let z = days + 719468;
     let era = z.div_euclid(146097);
     let doe = z.rem_euclid(146097);
@@ -494,11 +494,11 @@ unsafe extern "stdcall" fn MultiByteToWideChar(_cp: u32, _flags: u32, src: *cons
     len as i32
 }
 
-// ---- memória global, seções críticas, miscelânea ------------------------------------------
+// ---- global memory, critical sections, miscellaneous --------------------------------------
 
 #[allow(non_snake_case)]
 extern "stdcall" fn GlobalAlloc(_flags: u32, bytes: usize) -> *mut c_void {
-    unsafe { calloc(1, bytes.max(1)) } // o "handle" é o próprio ponteiro (sem memória móvel)
+    unsafe { calloc(1, bytes.max(1)) } // the "handle" is the pointer itself (no movable memory)
 }
 
 #[allow(non_snake_case)]
@@ -538,7 +538,7 @@ extern "stdcall" fn FreeResource(_h: u32) -> i32 {
 }
 
 #[allow(non_snake_case)]
-extern "stdcall" fn FreeLibrary(_m: u32) -> i32 { // DLLs ficam carregadas até o fim do processo
+extern "stdcall" fn FreeLibrary(_m: u32) -> i32 { // DLLs stay loaded until the end of the process
     
     1
 }
@@ -549,8 +549,8 @@ extern "stdcall" fn RaiseException(code: u32, _flags: u32, _n: u32, _args: u32) 
     exit_process(code)
 }
 
-// CRITICAL_SECTION (24 bytes, na memória do programa): [4]=LockCount, [8]=RecursionCount,
-// [12]=OwningThread. Implementada com o dono em [12] e espera ativa curta.
+// CRITICAL_SECTION (24 bytes, in program memory): [4]=LockCount, [8]=RecursionCount,
+// [12]=OwningThread. Implemented with the owner in [12] and a short busy wait.
 #[allow(non_snake_case)]
 unsafe extern "stdcall" fn InitializeCriticalSection(cs: *mut u32) {
     std::ptr::write_bytes(cs as *mut u8, 0, 24);

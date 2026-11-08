@@ -1,4 +1,4 @@
-//! oleaut32.dll — apenas BSTR e VARIANT básicos (o runtime do VB4 importa por ordinal).
+//! oleaut32.dll — basic BSTR and VARIANT only (the VB4 runtime imports by ordinal).
 
 pub fn resolve(name: &str) -> Option<usize> {
     exports!(name, SysAllocString, SysReAllocString, SysAllocStringLen, SysReAllocStringLen, SysFreeString, SysStringLen, VariantInit, VariantClear, SysStringByteLen, SysAllocStringByteLen, OaBuildVersion, VariantCopy, VariantCopyInd,
@@ -8,7 +8,7 @@ pub fn resolve(name: &str) -> Option<usize> {
         SafeArrayAllocDescriptor, SafeArrayAllocData, SafeArrayDestroyDescriptor, SafeArrayDestroyData)
 }
 
-/// Ordinais públicos do oleaut32 (os que implementamos).
+/// Public oleaut32 ordinals (the ones we implement).
 pub fn name_of(ordinal: u32) -> Option<&'static str> {
     Some(match ordinal {
         2 => "SysAllocString",
@@ -46,7 +46,7 @@ pub fn name_of(ordinal: u32) -> Option<&'static str> {
     })
 }
 
-// BSTR: [u32 tamanho em bytes][UTF-16][NUL]; o ponteiro aponta para o primeiro caractere.
+// BSTR: [u32 size in bytes][UTF-16][NUL]; the pointer points to the first character.
 unsafe fn alloc_bstr(src: *const u16, len: u32) -> u32 {
     let bytes = len as usize * 2;
     let block = Box::leak(vec![0u8; 4 + bytes + 2].into_boxed_slice()).as_mut_ptr();
@@ -74,7 +74,7 @@ unsafe extern "stdcall" fn SysAllocStringLen(s: *const u16, len: u32) -> u32 {
 
 #[allow(non_snake_case)]
 unsafe extern "stdcall" fn SysReAllocString(slot: *mut u32, s: *const u16) -> i32 {
-    *slot = SysAllocString(s); // o bloco antigo vaza (sem free): aceitável por ora
+    *slot = SysAllocString(s); // the old block leaks (no free): acceptable for now
     1
 }
 
@@ -124,7 +124,7 @@ extern "stdcall" fn OaBuildVersion() -> u32 {
 }
 
 // ---- VARIANT ------------------------------------------------------------------------------
-// VARIANT (16 bytes): vt u16 | reservado 6 | dados 8 (a partir de +8).
+// VARIANT (16 bytes): vt u16 | reserved 6 | data 8 (starting at +8).
 
 const VT_I2: u16 = 2;
 const VT_I4: u16 = 3;
@@ -178,7 +178,7 @@ unsafe extern "stdcall" fn VariantCopyInd(dst: *mut u8, src: *const u8) -> u32 {
     0
 }
 
-/// Lê o variante como f64 (numéricos e BSTR numérica).
+/// Reads the variant as f64 (numerics and numeric BSTR).
 unsafe fn as_f64(v: *const u8) -> Option<f64> {
     let d = v.add(8);
     Some(match *(v as *const u16) {
@@ -332,7 +332,7 @@ unsafe extern "stdcall" fn SafeArrayUnaccessData(psa: *mut u8) -> u32 {
     SafeArrayUnlock(psa)
 }
 
-/// Endereço do elemento com os índices dados (índice 0 = dimensão mais à esquerda).
+/// Element address for the given indices (index 0 = leftmost dimension).
 unsafe fn element_ptr(psa: *const u8, idx: *const i32) -> Option<*mut u8> {
     let nd = dims(psa);
     let mut off = 0usize;

@@ -1,4 +1,4 @@
-//! Menus: leitura de recursos RT_MENU e a tabela de menus do processo.
+//! Menus: reading RT_MENU resources and the process menu table.
 
 use super::resources::{self, ResId};
 use std::collections::BTreeMap;
@@ -17,7 +17,7 @@ pub struct Item {
     pub id: u32,
     pub text: String,
     pub flags: u32,
-    /// Submenu (HMENU) quando é popup.
+    /// Submenu (HMENU) when it is a popup.
     pub sub: u32,
 }
 
@@ -36,7 +36,7 @@ unsafe fn r16(a: u32) -> u32 {
     *(a as usize as *const u16) as u32
 }
 
-/// Lê os itens de um (sub)menu a partir de `p`; devolve (itens, próximo endereço).
+/// Reads the items of a (sub)menu at `p`; returns (items, next address).
 unsafe fn parse(mut p: u32) -> (Vec<Item>, u32) {
     let mut items = Vec::new();
     loop {
@@ -61,7 +61,7 @@ unsafe fn parse(mut p: u32) -> (Vec<Item>, u32) {
     (items, p)
 }
 
-/// Carrega o menu `name` (RT_MENU) do módulo; devolve o HMENU.
+/// Loads menu `name` (RT_MENU) from the module; returns the HMENU.
 pub unsafe fn load(base: u32, name: &ResId) -> u32 {
     let Some((_, data, _)) = resources::find(base, &ResId::Id(resources::RT_MENU), name) else { return 0 };
     let header_size = r16(data + 2);
@@ -89,13 +89,13 @@ pub fn destroy(h: u32) -> bool {
     removed.is_some()
 }
 
-/// Aplica `f` ao item (por id, buscando nos submenus, ou por posição) e devolve o resultado.
+/// Applies `f` to the item (by id, searching submenus, or by position) and returns the result.
 pub fn with_item<R>(menu: u32, id_or_pos: u32, by_pos: bool, f: impl FnOnce(&mut Item) -> R) -> Option<R> {
     let mut all = MENUS.lock().unwrap();
     if by_pos {
         return all.get_mut(&menu)?.get_mut(id_or_pos as usize).map(f);
     }
-    // por id: procura em `menu` e, recursivamente, nos submenus
+    // by id: searches `menu` and, recursively, the submenus
     let mut stack = vec![menu];
     while let Some(m) = stack.pop() {
         let Some(items) = all.get(&m) else { continue };

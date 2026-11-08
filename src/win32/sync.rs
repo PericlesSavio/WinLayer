@@ -1,4 +1,4 @@
-//! Threads, TLS e objetos de sincronização (evento, mutex) do kernel32.
+//! Threads, TLS and synchronization objects (event, mutex) of kernel32.
 
 use std::cell::{Cell, RefCell};
 use std::collections::BTreeMap;
@@ -32,7 +32,7 @@ struct State {
     owner: u32,
     count: u32,
     suspended: bool,
-    /// Threads bloqueadas neste evento e quantas o PulseEvent liberou e ainda não acordaram.
+    /// Threads blocked on this event and how many PulseEvent released that have not woken up yet.
     waiters: u32,
     pulses: u32,
 }
@@ -86,7 +86,7 @@ pub fn close(h: u32) {
     TABLE.lock().unwrap().remove(&h);
 }
 
-// ---- eventos e mutexes --------------------------------------------------------------------
+// ---- events and mutexes -------------------------------------------------------------------
 
 #[allow(non_snake_case)]
 extern "stdcall" fn CreateEventA(_attr: u32, manual: i32, initial: i32, _name: u32) -> u32 {
@@ -176,7 +176,7 @@ fn finish_current(code: u32) {
     if let Some(o) = get(h) {
         let mut st = o.st.lock().unwrap();
         st.signaled = true;
-        st.count = code; // guarda o exit code
+        st.count = code; // stores the exit code
         o.cv.notify_all();
     }
 }
@@ -208,7 +208,7 @@ extern "stdcall" fn CreateThread(_attr: u32, _stack: u32, start: u32, param: u32
 #[allow(non_snake_case)]
 extern "stdcall" fn ExitThread(code: u32) -> ! {
     if CURRENT.with(|c| c.get()) == 0 {
-        super::kernel32::exit_process(code) // thread principal
+        super::kernel32::exit_process(code) // main thread
     }
     finish_current(code);
     unsafe { pthread_exit(std::ptr::null_mut()) }
@@ -226,7 +226,7 @@ extern "stdcall" fn ResumeThread(h: u32) -> u32 {
 
 #[allow(non_snake_case)]
 extern "stdcall" fn GetThreadContext(_h: u32, _ctx: u32) -> i32 {
-    0 // não suportado
+    0 // not supported
 }
 
 #[allow(non_snake_case)]
@@ -246,8 +246,8 @@ extern "stdcall" fn GetCurrentProcessId() -> u32 {
 
 #[allow(non_snake_case)]
 extern "stdcall" fn GetTickCount() -> u32 {
-    // Relógio único (virtual no modo captura). Cada consulta avança 1 ms virtual: sem isso, laços de
-    // espera ocupada ("espere até GetTickCount passar de X") nunca terminam no modo captura.
+    // Single clock (virtual in capture mode). Each query advances 1 virtual ms: without this, busy-wait
+    // loops ("wait until GetTickCount passes X") never end in capture mode.
     super::user32::tick_virtual(1);
     super::user32::now_ms()
 }
@@ -285,8 +285,8 @@ extern "stdcall" fn ResetEvent(h: u32) -> i32 {
     1
 }
 
-/// Libera quem está esperando agora (todos, se o evento for manual; um, se automático) e deixa o evento
-/// desligado. Quem chega depois continua esperando.
+/// Releases whoever is waiting now (all, if the event is manual; one, if automatic) and leaves the event
+/// off. Anyone arriving later keeps waiting.
 #[allow(non_snake_case)]
 extern "stdcall" fn PulseEvent(h: u32) -> i32 {
     let Some(o) = get(h) else { return 0 };
@@ -300,7 +300,7 @@ extern "stdcall" fn PulseEvent(h: u32) -> i32 {
     1
 }
 
-/// Espera por vários objetos consultando cada um (sem bloquear) até o prazo.
+/// Waits on several objects by polling each one (without blocking) until the deadline.
 #[allow(non_snake_case)]
 unsafe extern "stdcall" fn WaitForMultipleObjects(n: u32, handles: *const u32, all: i32, ms: u32) -> u32 {
     if n == 0 || handles.is_null() {
@@ -341,14 +341,14 @@ extern "stdcall" fn SetPriorityClass(_h: u32, _class: u32) -> i32 {
     1
 }
 
-/// Suspender uma thread em execução não é suportado: devolve a contagem anterior (0) sem parar nada.
+/// Suspending a running thread is not supported: returns the previous count (0) without stopping anything.
 #[allow(non_snake_case)]
 extern "stdcall" fn SuspendThread(_h: u32) -> u32 {
     0
 }
 
-/// Contador de alta resolução em microssegundos. No modo captura segue o relógio virtual (e avança
-/// um pouco a cada consulta, como GetTickCount, para laços de espera ocupada terminarem).
+/// High-resolution counter in microseconds. In capture mode it follows the virtual clock (and advances
+/// a little on each query, like GetTickCount, so busy-wait loops end).
 #[allow(non_snake_case)]
 unsafe extern "stdcall" fn QueryPerformanceCounter(out: *mut u64) -> i32 {
     if out.is_null() {

@@ -1,5 +1,5 @@
-//! user32.dll — janelas, classes, fila de mensagens. Cada janela tem um buffer de
-//! pixels da área cliente; o `gdi32` desenha nele e `dump_screenshot` gera um PNG.
+//! user32.dll — windows, classes, message queue. Each window has a pixel buffer for its
+//! client area; `gdi32` draws on it and `dump_screenshot` generates a PNG.
 
 mod input;
 pub use input::{default_scan, tick_virtual, real_ms, input_key_down, GetCursorPos, KillTimer, ReleaseCapture, SetCapture, SetFocus, SetTimer, frame_version, now_ms, push_events, render_bgrx, render_rgba, set_shot_mode, shot_mode, touch};
@@ -9,7 +9,7 @@ use super::{call4, fnt, gdi32, listbox, menu, resources, text};
 use std::collections::{BTreeMap, VecDeque};
 use std::sync::Mutex;
 
-// mensagens
+// messages
 const WM_CREATE: u32 = 0x01;
 const WM_DESTROY: u32 = 0x02;
 const WM_SIZE: u32 = 0x05;
@@ -19,7 +19,7 @@ const WM_QUIT: u32 = 0x12;
 const WM_ERASEBKGND: u32 = 0x14;
 const WM_NCCREATE: u32 = 0x81;
 const WM_DRAWITEM: u32 = 0x2B;
-/// Pixel nunca pintado de uma janela filha (alpha 0): na composição, deixa ver o que está atrás.
+/// Never-painted pixel of a child window (alpha 0): when compositing, shows what is behind it.
 pub const TRANSPARENT: u32 = 0x0000_0000;
 const WM_COMMAND: u32 = 0x111;
 const WM_CHAR: u32 = 0x102;
@@ -29,10 +29,10 @@ const WM_LBUTTONDBLCLK: u32 = 0x203;
 const WM_INITDIALOG: u32 = 0x110;
 pub const WS_TABSTOP: u32 = 0x0001_0000;
 pub const DIALOG_CLASS: &str = "#32770";
-pub const DLU_X: i32 = 6; // unidade-base de diálogo (fonte padrão do Win9x): 6x13 px por 4x8 unidades
+pub const DLU_X: i32 = 6; // dialog base unit (Win9x default font): 6x13 px per 4x8 units
 pub const DLU_Y: i32 = 13;
 
-/// Unidade-base de diálogo (x, y): no Win16 é a da fonte System do Windows 3.1 (8x16); no Win32, 6x13.
+/// Dialog base unit (x, y): on Win16 it is that of the Windows 3.1 System font (8x16); on Win32, 6x13.
 pub fn dlu() -> (i32, i32) {
     if text::line_h() == 16 { (8, 16) } else { (DLU_X, DLU_Y) }
 }
@@ -44,19 +44,19 @@ pub const WS_VISIBLE: u32 = 0x1000_0000;
 const CW_USEDEFAULT: i32 = i32::MIN;
 const PM_REMOVE: u32 = 1;
 
-/// Tamanho do desktop virtual (padrão 640x480; mude com `--screen LxA` antes de abrir janelas).
+/// Virtual desktop size (default 640x480; change with `--screen WxH` before opening windows).
 static SCREEN: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new((640 << 16) | 480);
 
-/// Novo tamanho de tela pedido por outra thread (a janela X11 foi redimensionada): (largura << 16) | altura.
-/// Quem aplica é a thread do programa, entre mensagens, porque redimensionar envia WM_SIZE ao código do jogo.
+/// New screen size requested by another thread (the X11 window was resized): (width << 16) | height.
+/// The program thread applies it, between messages, because resizing sends WM_SIZE to the game code.
 static PENDING_SCREEN: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
 
 pub fn request_screen(w: usize, h: usize) {
     PENDING_SCREEN.store(((w.min(0xFFFF) as u32) << 16) | h.min(0xFFFF) as u32, std::sync::atomic::Ordering::Relaxed);
 }
 
-/// Aplica um pedido de mudança de tamanho de tela: muda o desktop virtual e estica a janela principal
-/// (a de maior área, com legenda) até a borda direita/inferior se ela já chegava lá.
+/// Applies a screen size change request: changes the virtual desktop and stretches the main window
+/// (the largest one with a caption) to the right/bottom edge if it already reached it.
 fn apply_pending_screen() {
     let v = PENDING_SCREEN.swap(0, std::sync::atomic::Ordering::Relaxed);
     if v == 0 {
@@ -71,7 +71,7 @@ fn apply_pending_screen() {
         return;
     }
     {
-        let _g = STATE.lock().unwrap(); // nenhum desenho em andamento durante a troca
+        let _g = STATE.lock().unwrap(); // no drawing in progress during the swap
         set_screen(nw as usize, nh as usize);
     }
     let main = {
@@ -93,11 +93,11 @@ fn apply_pending_screen() {
     touch();
 }
 
-/// Tamanho de tela fixado pelo programa (DirectDraw `SetDisplayMode`): redimensionar a janela X11
-/// passa a só escalar a imagem, sem mudar a "resolução" que o jogo vê.
+/// Screen size fixed by the program (DirectDraw `SetDisplayMode`): resizing the X11 window
+/// then only scales the image, without changing the "resolution" the game sees.
 static SCREEN_LOCKED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
-/// Muda o tamanho do desktop virtual (sob a trava de `STATE`, como `apply_pending_screen`) e o fixa.
+/// Changes the virtual desktop size (under the `STATE` lock, like `apply_pending_screen`) and fixes it.
 pub fn lock_screen(w: usize, h: usize) {
     SCREEN_LOCKED.store(true, std::sync::atomic::Ordering::Relaxed);
     let _g = STATE.lock().unwrap();
@@ -106,7 +106,7 @@ pub fn lock_screen(w: usize, h: usize) {
     touch();
 }
 
-/// Origem da área cliente de `hwnd` em coordenadas de tela.
+/// Origin of the client area of `hwnd` in screen coordinates.
 pub fn client_screen_origin(hwnd: u32) -> (i32, i32) {
     client_origin(&STATE.lock().unwrap(), hwnd)
 }
@@ -125,10 +125,10 @@ pub fn desktop_h() -> usize {
 pub const CAPTION_H: i32 = 19;
 pub const BORDER: i32 = 4;
 
-/// Deslocamento para cima (px) dos botões de diálogos Win16 com moldura dupla.
+/// Upward offset (px) of the buttons of Win16 double-frame dialogs.
 const BUTTON_NUDGE: i32 = 6;
 
-/// Moldura dupla de diálogo sem legenda (WS_DLGFRAME): 3 px de cada lado, fora da área cliente.
+/// Double frame of a dialog without caption (WS_DLGFRAME): 3 px on each side, outside the client area.
 pub fn dlg_frame(style: u32) -> i32 {
     if style & WS_CHILD == 0 && style & WS_CAPTION == 0x40_0000 { 3 } else { 0 }
 }
@@ -137,11 +137,11 @@ const MENU_H: i32 = 19;
 struct Class {
     proc_: u32,
     bg: u32,
-    /// lpszMenuName do WNDCLASS (ordinal ou ponteiro).
+    /// lpszMenuName of the WNDCLASS (ordinal or pointer).
     menu: u32,
-    /// WNDCLASSA completo, como registrado (para GetClassInfoA).
+    /// Full WNDCLASSA, as registered (for GetClassInfoA).
     raw: [u32; 10],
-    /// WndProc é um ponteiro far de 16 bits (classe registrada por um programa Win16).
+    /// WndProc is a 16-bit far pointer (class registered by a Win16 program).
     is16: bool,
 }
 
@@ -157,14 +157,14 @@ struct Window {
     ch: i32,
     parent: u32,
     id: u32,
-    /// `proc_`/`dlgproc` são ponteiros far de 16 bits.
+    /// `proc_`/`dlgproc` are 16-bit far pointers.
     is16: bool,
-    /// Ordem de empilhamento entre janelas de nível superior (maior = mais à frente).
+    /// Stacking order among top-level windows (higher = closer to the front).
     z: u64,
-    /// Estado de controles: bit 0 = marcado, bit 1 = pressionado.
+    /// Control state: bit 0 = checked, bit 1 = pressed.
     state: u32,
     enabled: bool,
-    /// HMENU da barra de menu (0 = sem menu).
+    /// HMENU of the menu bar (0 = no menu).
     menu: u32,
     longs: BTreeMap<i32, u32>,
     dlgproc: u32,
@@ -191,7 +191,7 @@ struct State {
     quit: Option<u32>,
     next_hwnd: u32,
     timers: Vec<input::Timer>,
-    /// WM_TIMER vencidos: entregues só quando não há mensagem nem pintura pendente (menor prioridade).
+    /// Expired WM_TIMERs: delivered only when no message or paint is pending (lowest priority).
     timer_msgs: VecDeque<Msg>,
     frames: u32,
     props: BTreeMap<(u32, String), u32>,
@@ -200,12 +200,12 @@ struct State {
     active: u32,
     capture: u32,
     popup: Option<input::Popup>,
-    /// Janela sendo arrastada pela barra de título: (hwnd, deslocamento x, y).
+    /// Window being dragged by the title bar: (hwnd, x offset, y).
     drag: Option<(u32, i32, i32)>,
-    /// Janela sendo redimensionada pela moldura.
+    /// Window being resized by the frame.
     resize: Option<input::Resize>,
     keys: [bool; 256],
-    /// Último clique: (janela, botão, instante em ms, x, y), para detectar duplo clique.
+    /// Last click: (window, button, time in ms, x, y), to detect double clicks.
     last_click: (u32, u32, u32, i32, i32),
     next_timer: u32,
 }
@@ -261,7 +261,7 @@ pub unsafe fn cstr(p: u32) -> String {
     if p == 0 {
         String::new()
     } else if p < 0x10000 {
-        format!("#atom{p}") // atom de classe
+        format!("#atom{p}") // class atom
     } else {
         std::ffi::CStr::from_ptr(p as usize as *const i8).to_string_lossy().into_owned()
     }
@@ -275,13 +275,13 @@ fn proc_of(hwnd: u32) -> u32 {
     STATE.lock().unwrap().windows.get(&hwnd).map_or(0, |w| w.proc_)
 }
 
-/// Envia a mensagem direto ao WndProc (sem passar pela fila).
+/// Sends the message directly to the WndProc (bypassing the queue).
 pub fn send(hwnd: u32, msg: u32, w: u32, l: u32) -> u32 {
     let (p, dp, is16) = STATE.lock().unwrap().windows.get(&hwnd).map_or((0, 0, false), |win| (win.proc_, win.dlgproc, win.is16));
     if trace() { eprintln!("[user32] send hwnd={hwnd:#x} msg={msg:#x} w={w:#x} l={l:#x} proc={p:#x} dlgproc={dp:#x}") }
     if p != 0 {
-        // Classe com procedimento próprio (inclusive uma "#32770" registrada pelo programa): ele é quem
-        // chama DefDlgProc, que por sua vez invoca o DLGPROC.
+        // Class with its own procedure (including a "#32770" registered by the program): it is the one that
+        // calls DefDlgProc, which in turn invokes the DLGPROC.
         return call_proc(is16, p, hwnd, msg, w, l);
     }
     if dp != 0 {
@@ -290,14 +290,14 @@ pub fn send(hwnd: u32, msg: u32, w: u32, l: u32) -> u32 {
     builtin_proc(hwnd, msg, w, l)
 }
 
-/// DefDlgProc: o DLGPROC do diálogo vê a mensagem primeiro; se devolver 0 (não tratou), valem os
-/// padrões do sistema.
+/// DefDlgProc: the dialog's DLGPROC sees the message first; if it returns 0 (not handled), the
+/// system defaults apply.
 pub fn def_dlg_proc(hwnd: u32, msg: u32, w: u32, l: u32) -> u32 {
     let (dp, is16) = STATE.lock().unwrap().windows.get(&hwnd).map_or((0, false), |win| (win.dlgproc, win.is16));
     if dp != 0 {
         let mut r = call_proc(is16, dp, hwnd, msg, w, l);
         if is16 {
-            r &= 0xFFFF; // DlgProc devolve BOOL (só AX); DX é lixo
+            r &= 0xFFFF; // DlgProc returns BOOL (AX only); DX is garbage
         }
         if r != 0 || msg == WM_INITDIALOG {
             return r;
@@ -306,7 +306,7 @@ pub fn def_dlg_proc(hwnd: u32, msg: u32, w: u32, l: u32) -> u32 {
     builtin_proc(hwnd, msg, w, l)
 }
 
-/// Chama um WndProc/DlgProc: de 32 bits direto; de 16 bits pelo gancho da camada Win16.
+/// Calls a WndProc/DlgProc: 32-bit directly; 16-bit through the Win16 layer hook.
 fn call_proc(is16: bool, f: u32, hwnd: u32, msg: u32, w: u32, l: u32) -> u32 {
     if is16 {
         let hook = HOOK16.lock().unwrap().call;
@@ -315,14 +315,14 @@ fn call_proc(is16: bool, f: u32, hwnd: u32, msg: u32, w: u32, l: u32) -> u32 {
     unsafe { call4(f, hwnd, msg, w, l) }
 }
 
-/// Ganchos que a camada Win16 registra: chamar procedimentos de 16 bits e carregar menus NE.
+/// Hooks registered by the Win16 layer: calling 16-bit procedures and loading NE menus.
 pub struct Hooks {
     pub call: Option<fn(u32, u32, u32, u32, u32) -> u32>,
     pub menu: Option<fn(u32) -> u32>,
 }
 
 pub static HOOK16: Mutex<Hooks> = Mutex::new(Hooks { call: None, menu: None });
-/// Quando verdadeiro, janelas de diálogo criadas com `dlgproc` usam procedimento de 16 bits.
+/// When true, dialog windows created with `dlgproc` use a 16-bit procedure.
 pub static DLG16: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 pub fn set_win16_hooks(call: fn(u32, u32, u32, u32, u32) -> u32, menu: fn(u32) -> u32) {
@@ -331,7 +331,7 @@ pub fn set_win16_hooks(call: fn(u32, u32, u32, u32, u32) -> u32, menu: fn(u32) -
     h.menu = Some(menu);
 }
 
-/// Registra uma classe de janela de um programa Win16.
+/// Registers a window class of a Win16 program.
 pub fn register_class16(name: String, proc16: u32, style: u32, bg: u32, menu_name: u32) {
     let mut raw = [0u32; 10];
     raw[0] = style;
@@ -341,7 +341,7 @@ pub fn register_class16(name: String, proc16: u32, style: u32, bg: u32, menu_nam
     STATE.lock().unwrap().classes.insert(name, Class { proc_: proc16, bg, menu: menu_name, raw, is16: true });
 }
 
-/// Classes nativas (diálogo, button, static, edit...) sem WndProc do programa.
+/// Native classes (dialog, button, static, edit...) without a program WndProc.
 fn builtin_proc(hwnd: u32, msg: u32, w: u32, l: u32) -> u32 {
     let (class, style, id, parent, cw, ch, title, state, focused) = {
         let s = STATE.lock().unwrap();
@@ -352,7 +352,7 @@ fn builtin_proc(hwnd: u32, msg: u32, w: u32, l: u32) -> u32 {
     };
     if class == "listbox" {
         if let Some(r) = listbox::message(hwnd, style, cw, ch, msg, w, l) {
-            set_state_bit(hwnd, 0, false); // só pede repintura
+            set_state_bit(hwnd, 0, false); // only requests a repaint
             return r;
         }
         if msg == WM_LBUTTONDOWN || msg == WM_LBUTTONDBLCLK {
@@ -369,7 +369,7 @@ fn builtin_proc(hwnd: u32, msg: u32, w: u32, l: u32) -> u32 {
             return 0;
         }
     }
-    // Mensagens que não são pintura.
+    // Messages that are not painting.
     match (class.as_str(), msg) {
         ("button", WM_LBUTTONDOWN) | ("button", WM_LBUTTONDBLCLK) => {
             button_down(hwnd);
@@ -394,7 +394,7 @@ fn builtin_proc(hwnd: u32, msg: u32, w: u32, l: u32) -> u32 {
             return 0;
         }
         (DIALOG_CLASS, 0x10) => {
-            send(hwnd, WM_COMMAND, 2, 0); // WM_CLOSE num diálogo = IDCANCEL
+            send(hwnd, WM_COMMAND, 2, 0); // WM_CLOSE on a dialog = IDCANCEL
             return 0;
         }
         _ => {}
@@ -414,7 +414,7 @@ fn builtin_proc(hwnd: u32, msg: u32, w: u32, l: u32) -> u32 {
     let (checked, pressed) = (state & 1 != 0, state & 2 != 0);
     match class.as_str() {
         DIALOG_CLASS => {
-            // Janela de 16 bits: o fundo já foi apagado no ShowWindow e o jogo pode ter desenhado por cima.
+            // 16-bit window: the background was already erased in ShowWindow and the game may have drawn over it.
             let is16 = STATE.lock().unwrap().windows.get(&hwnd).is_some_and(|w| w.is16);
             if !is16 {
                 with_buf(hwnd, |px, _, _| px.fill(draw::GRAY));
@@ -423,7 +423,7 @@ fn builtin_proc(hwnd: u32, msg: u32, w: u32, l: u32) -> u32 {
         "button" => {
             let kind = style & 0xF;
             if kind == 0xB {
-                // BS_OWNERDRAW: o pai desenha via WM_DRAWITEM (DRAWITEMSTRUCT).
+                // BS_OWNERDRAW: the parent draws via WM_DRAWITEM (DRAWITEMSTRUCT).
                 let hdc = gdi32::dc_for_window(hwnd);
                 let item_state = (pressed as u32) | if focused { 0x10 } else { 0 }; // ODS_SELECTED | ODS_FOCUS
                 let dis: [u32; 12] = [4, id, 0, 1, item_state, hwnd, hdc, 0, 0, cw as u32, ch as u32, 0];
@@ -438,7 +438,7 @@ fn builtin_proc(hwnd: u32, msg: u32, w: u32, l: u32) -> u32 {
                 match kind {
                     0 | 1 => {
                         if pressed { b.sunken(0, 0, w, h) } else { b.raised(0, 0, w, h) }
-                        if kind == 1 && !pressed { b.frame(0, 0, w, h, draw::BLACK, draw::BLACK) } // botão padrão
+                        if kind == 1 && !pressed { b.frame(0, 0, w, h, draw::BLACK, draw::BLACK) } // default button
                         let tw = text::width(false, &label);
                         let o = pressed as i32;
                         b.text((w - tw) / 2 + o, text_y + o, &label, draw::BLACK, false);
@@ -499,7 +499,7 @@ fn builtin_proc(hwnd: u32, msg: u32, w: u32, l: u32) -> u32 {
                 b.sunken(0, 0, w, h);
                 let tw = b.text(4, text_y.max(2), &label, draw::BLACK, false);
                 if focused && class == "edit" {
-                    b.fill(4 + tw, 3, 5 + tw, h - 3, draw::BLACK); // cursor de texto
+                    b.fill(4 + tw, 3, 5 + tw, h - 3, draw::BLACK); // text cursor
                 }
             });
         }
@@ -532,7 +532,7 @@ fn button_down(hwnd: u32) {
     touch();
 }
 
-/// Solta o botão: se foi dentro do controle, alterna marcas e avisa o pai (BN_CLICKED).
+/// Button release: if inside the control, toggles checks and notifies the parent (BN_CLICKED).
 fn button_up(hwnd: u32, lparam: u32) {
     let (x, y) = ((lparam & 0xFFFF) as i16 as i32, (lparam >> 16) as i16 as i32);
     let mut notify = None;
@@ -555,7 +555,7 @@ fn button_up(hwnd: u32, lparam: u32) {
             notify = Some((parent, id, kind));
         }
         if let Some((parent, _, 9)) = notify {
-            // desmarca os outros radios do mesmo pai
+            // unchecks the other radios of the same parent
             let others: Vec<u32> = s.windows.iter()
                 .filter(|(&h, o)| h != hwnd && o.parent == parent && o.class.eq_ignore_ascii_case("button") && matches!(o.style & 0xF, 4 | 9))
                 .map(|(&h, _)| h)
@@ -586,7 +586,7 @@ fn edit_char(hwnd: u32, ch: u32) {
     touch();
 }
 
-/// Acesso ao buffer de pixels da área cliente de uma janela.
+/// Access to the client-area pixel buffer of a window.
 pub fn with_buf<R>(hwnd: u32, f: impl FnOnce(&mut [u32], i32, i32) -> R) -> Option<R> {
     touch();
     let mut s = STATE.lock().unwrap();
@@ -612,9 +612,9 @@ fn fill_background(hwnd: u32) {
     with_buf(hwnd, |px, _, _| px.fill(gdi32::colorref_to_px(color)));
 }
 
-// ---- classes e janelas --------------------------------------------------------------------
+// ---- classes and windows ------------------------------------------------------------------
 
-/// WNDCLASSEXA é o WNDCLASSA precedido de cbSize (e seguido de hIconSm).
+/// WNDCLASSEXA is WNDCLASSA preceded by cbSize (and followed by hIconSm).
 #[allow(non_snake_case)]
 pub unsafe extern "stdcall" fn RegisterClassExA(wc: *const u32) -> u32 {
     RegisterClassA(wc.add(1)) as u32
@@ -639,14 +639,14 @@ pub unsafe extern "stdcall" fn CreateWindowExA(
     create_window(cstr(class), cstr(title), style, x, y, w, h, parent, menu, inst, param, 0)
 }
 
-/// `dlgproc != 0` cria a janela de um diálogo (sem WM_CREATE; o WM_INITDIALOG vem depois).
+/// `dlgproc != 0` creates a dialog window (no WM_CREATE; WM_INITDIALOG comes later).
 #[allow(clippy::too_many_arguments)]
 pub unsafe fn create_window(
     class: String, title: String, style: u32, x: i32, y: i32, w: i32, h: i32,
     parent: u32, menu: u32, inst: u32, param: u32, dlgproc: u32,
 ) -> u32 {
     if trace() { eprintln!("[user32] CreateWindowEx class={class:?} title={title:?} style={style:#x} {x},{y} {w}x{h}") }
-    // Janelas de nível superior: `menu` é um HMENU; sem ele vale o menu da classe.
+    // Top-level windows: `menu` is an HMENU; without it the class menu applies.
     let hmenu = if style & WS_CHILD != 0 || dlgproc != 0 {
         0
     } else if menu != 0 && menu::exists(menu) {
@@ -770,8 +770,8 @@ pub extern "stdcall" fn ShowWindow(hwnd: u32, cmd: u32) -> i32 {
     let was = w.visible;
     w.visible = cmd != 0;
     let erase_now = w.visible && !was && w.is16 && w.need_erase;
-    // Primeira janela de nível superior que aparece (Win32): o Windows a ativa e avisa o programa.
-    // Jogos de DirectDraw só desenham depois de receber WM_ACTIVATEAPP/WM_ACTIVATE.
+    // First top-level window to appear (Win32): Windows activates it and notifies the program.
+    // DirectDraw games only draw after receiving WM_ACTIVATEAPP/WM_ACTIVATE.
     let activate_now = w.visible && !was && !w.is16 && w.style & WS_CHILD == 0 && !matches!(cmd, 4 | 7 | 8)
         && !APP_ACTIVATED.swap(true, std::sync::atomic::Ordering::Relaxed);
     if w.visible {
@@ -782,7 +782,7 @@ pub extern "stdcall" fn ShowWindow(hwnd: u32, cmd: u32) -> i32 {
     }
     drop(s);
     if erase_now {
-        // O Windows apaga o fundo na hora em que a janela aparece; o WM_PAINT vem depois, sem apagar.
+        // Windows erases the background when the window appears; WM_PAINT comes later, without erasing.
         let hdc = gdi32::dc_for_window(hwnd);
         if send(hwnd, WM_ERASEBKGND, hdc, 0) == 0 {
             fill_background(hwnd);
@@ -798,7 +798,7 @@ pub extern "stdcall" fn ShowWindow(hwnd: u32, cmd: u32) -> i32 {
     was as i32
 }
 
-/// O programa já recebeu WM_ACTIVATEAPP (só a primeira janela que aparece dispara).
+/// The program has already received WM_ACTIVATEAPP (only the first window to appear triggers it).
 static APP_ACTIVATED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 const WM_ACTIVATE: u32 = 0x0006;
 const WM_ACTIVATEAPP: u32 = 0x001C;
@@ -848,8 +848,8 @@ pub extern "stdcall" fn MoveWindow(hwnd: u32, x: i32, y: i32, w: i32, h: i32, _r
     {
         let mut s = STATE.lock().unwrap();
         let nudge = {
-            // botões de diálogos com moldura dupla do Win16 (ex.: OK/Go Back do Civilization) sobem
-            // BUTTON_NUDGE px em relação ao que o programa pede (ajuste pedido pelo usuário)
+            // buttons of Win16 double-frame dialogs (e.g. OK/Go Back in Civilization) move up
+            // BUTTON_NUDGE px from what the program requests (adjustment requested by the user)
             let w0 = s.windows.get(&hwnd);
             let parent_framed = w0.is_some_and(|c| c.class.eq_ignore_ascii_case("button") && c.style & WS_CHILD != 0 && s.windows.get(&c.parent).is_some_and(|p| p.is16 && dlg_frame(p.style) > 0));
             if parent_framed { BUTTON_NUDGE } else { 0 }
@@ -873,7 +873,7 @@ pub extern "stdcall" fn MoveWindow(hwnd: u32, x: i32, y: i32, w: i32, h: i32, _r
     1
 }
 
-// ---- fila de mensagens --------------------------------------------------------------------
+// ---- message queue ------------------------------------------------------------------------
 
 unsafe fn write_msg(out: *mut u32, m: Msg) {
     *out = m.hwnd;
@@ -886,13 +886,13 @@ unsafe fn write_msg(out: *mut u32, m: Msg) {
     *out.add(6) = cy as u32;
 }
 
-/// Próxima mensagem: fila, depois WM_PAINT pendente, depois WM_QUIT.
+/// Next message: queue, then pending WM_PAINT, then WM_QUIT.
 pub fn next_message(remove: bool) -> Option<Msg> {
     next_message_filtered(remove, 0, 0, 0)
 }
 
-/// Como `next_message`, respeitando o filtro de janela (`hwnd`, 0 = qualquer) e de faixa de mensagens
-/// (`min..=max`, ambos 0 = todas), como `PeekMessage`/`GetMessage`.
+/// Like `next_message`, honoring the window filter (`hwnd`, 0 = any) and the message range filter
+/// (`min..=max`, both 0 = all), like `PeekMessage`/`GetMessage`.
 fn is_descendant(s: &State, mut h: u32, root: u32) -> bool {
     for _ in 0..16 {
         match s.windows.get(&h) {
@@ -908,10 +908,10 @@ fn is_descendant(s: &State, mut h: u32, root: u32) -> bool {
 
 pub fn next_message_filtered(remove: bool, hwnd: u32, min: u32, max: u32) -> Option<Msg> {
     apply_pending_screen();
-    input::pump(); // entrada pendente e timers vencidos viram mensagens
+    input::pump(); // pending input and expired timers become messages
     let in_range = |m: u32| (min == 0 && max == 0) || (m >= min && m <= max);
     let mut s = STATE.lock().unwrap();
-    // O filtro de janela inclui os filhos (como no Windows).
+    // The window filter includes children (as on Windows).
     let for_window = |s: &State, h: u32| hwnd == 0 || h == hwnd || is_descendant(s, h, hwnd);
     if let Some(i) = s.queue.iter().position(|m| in_range(m.message) && for_window(&s, m.hwnd)) {
         let m = s.queue[i];
@@ -938,11 +938,11 @@ pub fn next_message_filtered(remove: bool, hwnd: u32, min: u32, max: u32) -> Opt
     None
 }
 
-/// Chamado quando não há nada a fazer. No modo captura (`--shot`) o tempo é virtual: avança
-/// quadros (roteiro `wait`, timers) e, esgotados, salva o PNG e encerra. Com visualizador, dorme.
+/// Called when there is nothing to do. In capture mode (`--shot`) time is virtual: advances
+/// frames (`wait` script, timers) and, once exhausted, saves the PNG and exits. With a viewer, sleeps.
 fn idle() {
     if shot_mode() {
-        // Cede tempo real às threads do programa (o tempo do programa é virtual, o delas não).
+        // Yields real time to the program threads (program time is virtual, theirs is not).
         std::thread::sleep(std::time::Duration::from_millis(5));
         if input::take_wait() {
             input::advance_virtual(50);
@@ -951,7 +951,7 @@ fn idle() {
         if input::has_pending() {
             return;
         }
-        // Jogo de DirectDraw: quem encerra a captura é a contagem de quadros (ver `ddraw::frame_done`).
+        // DirectDraw game: the frame count is what ends the capture (see `ddraw::frame_done`).
         if super::ddraw::active() {
             input::advance_virtual(16);
             return;
@@ -1008,7 +1008,7 @@ pub extern "stdcall" fn TranslateMessage(_msg: u32) -> i32 {
 pub unsafe extern "stdcall" fn DispatchMessageA(msg: *const u32) -> u32 {
     let (hwnd, m, w, l) = (*msg, *msg.add(1), *msg.add(2), *msg.add(3));
     if m == WM_TIMER && l != 0 {
-        return call4(l, hwnd, WM_TIMER, w, now_ms()); // SetTimer com TIMERPROC
+        return call4(l, hwnd, WM_TIMER, w, now_ms()); // SetTimer with TIMERPROC
     }
     send(hwnd, m, w, l)
 }
@@ -1029,7 +1029,7 @@ pub extern "stdcall" fn PostQuitMessage(code: u32) {
     STATE.lock().unwrap().quit = Some(code);
 }
 
-// ---- pintura ------------------------------------------------------------------------------
+// ---- painting -----------------------------------------------------------------------------
 
 #[allow(non_snake_case)]
 pub unsafe extern "stdcall" fn BeginPaint(hwnd: u32, ps: *mut u32) -> u32 {
@@ -1069,7 +1069,7 @@ pub extern "stdcall" fn ReleaseDC(_hwnd: u32, hdc: u32) -> i32 {
     1
 }
 
-// ---- recursos, diálogos, menus (stubs) ----------------------------------------------------
+// ---- resources, dialogs, menus (stubs) ----------------------------------------------------
 
 #[allow(non_snake_case)]
 pub extern "stdcall" fn LoadCursorA(_inst: u32, _name: u32) -> u32 {
@@ -1106,16 +1106,16 @@ pub extern "stdcall" fn SendDlgItemMessageA(dlg: u32, id: i32, msg: u32, w: u32,
 
 const IDOK: i32 = 1;
 
-/// TODO: janela de verdade. Por ora, escreve no stderr.
+/// TODO: a real window. For now, writes to stderr.
 #[allow(non_snake_case)]
 pub unsafe extern "stdcall" fn MessageBoxA(_hwnd: u32, text: u32, caption: u32, _kind: u32) -> i32 {
     eprintln!("[MessageBox] {}\n{}", cstr(caption), cstr(text));
     IDOK
 }
 
-// ---- wsprintfA (cdecl, variádica) ---------------------------------------------------------
+// ---- wsprintfA (cdecl, variadic) ----------------------------------------------------------
 
-/// Lemos até 8 argumentos "extra" da pilha; o que o chamador não empilhou é lixo ignorado.
+/// We read up to 8 "extra" arguments from the stack; whatever the caller did not push is ignored garbage.
 #[allow(non_snake_case)]
 unsafe extern "C" fn wsprintfA(out: *mut u8, fmt: *const u8, a0: u32, a1: u32, a2: u32, a3: u32, a4: u32, a5: u32, a6: u32, a7: u32) -> i32 {
     let args = [a0, a1, a2, a3, a4, a5, a6, a7];
@@ -1175,7 +1175,7 @@ unsafe extern "C" fn wsprintfA(out: *mut u8, fmt: *const u8, a0: u32, a1: u32, a
     res.len() as i32
 }
 
-// ---- captura de tela ----------------------------------------------------------------------
+// ---- screen capture -----------------------------------------------------------------------
 
 fn blit(desk: &mut [u32], dx: i32, dy: i32, src: &[u32], sw: i32, sh: i32) {
     for y in 0..sh {
@@ -1188,7 +1188,7 @@ fn blit(desk: &mut [u32], dx: i32, dy: i32, src: &[u32], sw: i32, sh: i32) {
     }
 }
 
-/// Como `blit`, mas pula os pixels transparentes (janelas filhas ainda não pintadas).
+/// Like `blit`, but skips transparent pixels (child windows not painted yet).
 fn blit_keyed(desk: &mut [u32], dx: i32, dy: i32, src: &[u32], sw: i32, sh: i32) {
     for y in 0..sh {
         for x in 0..sw {
@@ -1217,7 +1217,7 @@ fn draw_window(s: &State, desk: &mut [u32], hwnd: u32, ox: i32, oy: i32) {
         let title = w.title.bytes().collect::<Vec<u8>>();
         let mut tb = Buf { px: desk, w: desktop_w() as i32, h: desktop_h() as i32 };
         tb.text(cx + BORDER + 3, cy + BORDER + 2, &title, draw::WHITE, true);
-        // botão de fechar
+        // close button
         let (bx, by) = (cx + w.w - BORDER - 18, cy + BORDER + 1);
         tb.fill(bx, by, bx + 16, by + 14, draw::GRAY);
         tb.raised(bx, by, bx + 16, by + 14);
@@ -1238,7 +1238,7 @@ fn draw_window(s: &State, desk: &mut [u32], hwnd: u32, ox: i32, oy: i32) {
     }
     let f = dlg_frame(w.style);
     if f > 0 {
-        // moldura dupla: preto por fora, cinza claro e sombra por dentro
+        // double frame: black outside, light gray and shadow inside
         rect(desk, cx, cy, w.w, w.h, 0xFF00_0000);
         rect(desk, cx + 1, cy + 1, w.w - 2, w.h - 2, 0xFFC0_C0C0);
         rect(desk, cx + 2, cy + 2, w.w - 4, w.h - 4, 0xFF80_8080);
@@ -1261,8 +1261,8 @@ pub fn render_desktop() -> Vec<u32> {
     render_desktop_sized().2
 }
 
-/// Desenha o desktop e devolve (largura, altura, pixels). O tamanho é lido sob o trava de `STATE`, a mesma
-/// que `apply_pending_screen` segura ao trocá-lo, então buffer e desenho sempre concordam.
+/// Draws the desktop and returns (width, height, pixels). The size is read under the `STATE` lock, the same one
+/// `apply_pending_screen` holds when changing it, so buffer and drawing always agree.
 pub fn render_desktop_sized() -> (usize, usize, Vec<u32>) {
     let s = STATE.lock().unwrap();
     let (w, h) = (desktop_w(), desktop_h());
@@ -1279,18 +1279,18 @@ pub fn render_desktop_sized() -> (usize, usize, Vec<u32>) {
 pub fn dump_screenshot(path: &str) {
     if std::env::var_os("WINLAYER_TRACE").is_some() {
         for (h, w) in &STATE.lock().unwrap().windows {
-            eprintln!("[janela {h:#x}] classe={:?} título={:?} pos=({}, {}) tam={}x{} cliente={}x{} estilo={:#x} visível={} pai={:#x}", w.class, w.title, w.x, w.y, w.w, w.h, w.cw, w.ch, w.style, w.visible, w.parent);
+            eprintln!("[window {h:#x}] class={:?} title={:?} pos=({}, {}) size={}x{} client={}x{} style={:#x} visible={} parent={:#x}", w.class, w.title, w.x, w.y, w.w, w.h, w.cw, w.ch, w.style, w.visible, w.parent);
         }
     }
     let (w, h, desk) = render_desktop_sized();
     let n = STATE.lock().unwrap().windows.len();
     match crate::png::write(path, w, h, &desk) {
-        Ok(()) => eprintln!("[winlayer] captura salva em {path} ({n} janelas)"),
-        Err(e) => eprintln!("[winlayer] falha ao salvar {path}: {e}"),
+        Ok(()) => eprintln!("[winlayer] capture saved to {path} ({n} windows)"),
+        Err(e) => eprintln!("[winlayer] failed to save {path}: {e}"),
     }
 }
 
-// ---- diálogos -----------------------------------------------------------------------------
+// ---- dialogs ------------------------------------------------------------------------------
 
 unsafe fn r16(a: u32) -> u32 {
     *(a as usize as *const u16) as u32
@@ -1302,7 +1302,7 @@ unsafe fn r32(a: u32) -> u32 {
     *(a as usize as *const u32)
 }
 
-/// Pula um campo "ordinal ou string" do DLGTEMPLATE (menu, classe).
+/// Skips an "ordinal or string" field of the DLGTEMPLATE (menu, class).
 unsafe fn skip_ord_or_str(p: u32) -> u32 {
     match r16(p) {
         0 => p + 2,
@@ -1311,17 +1311,17 @@ unsafe fn skip_ord_or_str(p: u32) -> u32 {
     }
 }
 
-/// Cria um diálogo (janela + controles) a partir de um DLGTEMPLATE e envia WM_INITDIALOG.
+/// Creates a dialog (window + controls) from a DLGTEMPLATE and sends WM_INITDIALOG.
 unsafe fn create_dialog(tmpl: u32, parent: u32, dlgproc: u32, param: u32) -> u32 {
     let style = r32(tmpl);
     let cdit = r16(tmpl + 8);
     let (dcx, dcy) = (r16s(tmpl + 14), r16s(tmpl + 16));
     let mut p = skip_ord_or_str(tmpl + 18); // menu
-    p = skip_ord_or_str(p); // classe
+    p = skip_ord_or_str(p); // class
     let (title, np) = resources::wide_z(p);
     p = np;
     if style & 0x40 != 0 {
-        // DS_SETFONT: tamanho + nome da fonte
+        // DS_SETFONT: size + font name
         p = resources::wide_z(p + 2).1;
     }
     let (cw, ch) = (dcx * DLU_X / 4, dcy * DLU_Y / 8);
@@ -1350,13 +1350,13 @@ unsafe fn create_dialog(tmpl: u32, parent: u32, dlgproc: u32, param: u32) -> u32
         };
         let text = if r16(p) == 0xFFFF {
             p += 4;
-            String::new() // título por ordinal (ícone/bitmap): ainda sem suporte
+            String::new() // title by ordinal (icon/bitmap): not supported yet
         } else {
             let (t, np) = resources::wide_z(p);
             p = np;
             t
         };
-        p += 2 + r16(p); // dados extras de criação
+        p += 2 + r16(p); // extra creation data
         let child = create_window(
             class, text, istyle | WS_CHILD, ix * DLU_X / 4, iy * DLU_Y / 8, icx * DLU_X / 4, icy * DLU_Y / 8,
             dlg, iid, 0, 0, 0,
@@ -1366,7 +1366,7 @@ unsafe fn create_dialog(tmpl: u32, parent: u32, dlgproc: u32, param: u32) -> u32
     }
     let focus_target = if first_tab != 0 { first_tab } else { first };
     if send(dlg, WM_INITDIALOG, focus_target, param) != 0 && focus_target != 0 {
-        STATE.lock().unwrap().focus = focus_target; // o diálogo aceitou o foco padrão
+        STATE.lock().unwrap().focus = focus_target; // the dialog accepted the default focus
     }
     dlg
 }
@@ -1379,7 +1379,7 @@ unsafe fn dialog_template(inst: u32, name: u32) -> Option<u32> {
 #[allow(non_snake_case)]
 pub unsafe extern "stdcall" fn DialogBoxParamA(inst: u32, name: u32, parent: u32, dlgproc: u32, param: u32) -> i32 {
     let Some(tmpl) = dialog_template(inst, name) else {
-        eprintln!("[winlayer] DialogBoxParamA: recurso de diálogo não encontrado");
+        eprintln!("[winlayer] DialogBoxParamA: dialog resource not found");
         return -1;
     };
     modal_dialog(tmpl, parent, dlgproc, param)
@@ -1401,7 +1401,7 @@ pub unsafe extern "stdcall" fn RedrawWindow(hwnd: u32, _rect: u32, _rgn: u32, fl
     1
 }
 
-/// Só o modo atual existe: trocar a resolução "funciona" sem fazer nada.
+/// Only the current mode exists: changing the resolution "works" without doing anything.
 #[allow(non_snake_case)]
 pub extern "stdcall" fn ChangeDisplaySettingsA(_mode: u32, _flags: u32) -> i32 {
     0
@@ -1415,7 +1415,7 @@ pub unsafe extern "stdcall" fn GetKeyNameTextA(_lparam: u32, buf: *mut u8, n: i3
     0
 }
 
-/// MAPVK_VK_TO_VSC (0) pela tabela de códigos de varredura; os demais modos não são suportados.
+/// MAPVK_VK_TO_VSC (0) via the scan code table; the other modes are not supported.
 #[allow(non_snake_case)]
 pub extern "stdcall" fn MapVirtualKeyA(code: u32, mode: u32) -> u32 {
     if mode == 0 { default_scan(code).0 } else { 0 }
@@ -1432,7 +1432,7 @@ unsafe fn modal_dialog(tmpl: u32, parent: u32, dlgproc: u32, param: u32) -> i32 
         match next_message(true) {
             Some(m) if m.message == WM_QUIT => {
                 destroy(dlg);
-                return 0; // o WM_QUIT continua marcado e encerra o loop principal
+                return 0; // WM_QUIT stays flagged and ends the main loop
             }
             Some(m) => {
                 send(m.hwnd, m.message, m.wparam, m.lparam);
@@ -1443,7 +1443,7 @@ unsafe fn modal_dialog(tmpl: u32, parent: u32, dlgproc: u32, param: u32) -> i32 
 }
 
 
-// ---- caixa de arquivo (GetOpenFileName / GetSaveFileName) -------------------------------------
+// ---- file dialog (GetOpenFileName / GetSaveFileName) ------------------------------------------
 
 static FILE_PICK: Mutex<Option<String>> = Mutex::new(None);
 
@@ -1451,7 +1451,7 @@ fn child_text(dlg: u32, id: u32) -> String {
     find_child(dlg, id).and_then(|c| STATE.lock().unwrap().windows.get(&c).map(|w| w.title.clone())).unwrap_or_default()
 }
 
-/// Procedimento do diálogo de arquivo (nativo): OK/Cancelar, seleção e duplo clique na lista.
+/// File dialog procedure (native): OK/Cancel, selection and double click on the list.
 extern "stdcall" fn filedlg_proc(hwnd: u32, msg: u32, w: u32, _l: u32) -> u32 {
     if msg != WM_COMMAND {
         return 0;
@@ -1488,8 +1488,8 @@ extern "stdcall" fn filedlg_proc(hwnd: u32, msg: u32, w: u32, _l: u32) -> u32 {
     }
 }
 
-/// Mostra uma caixa "abrir/salvar" modal. `dir` é um caminho do programa (vazio = raiz C:\), `ext` é a
-/// extensão do filtro (sem ponto; vazio ou "*" = todos). Devolve o nome digitado/escolhido.
+/// Shows a modal "open/save" dialog. `dir` is a program path (empty = root C:\), `ext` is the
+/// filter extension (without dot; empty or "*" = all). Returns the typed/chosen name.
 pub fn file_dialog(parent: u32, title: &str, dir: &str, ext: &str, default_name: &str, save: bool) -> Option<String> {
     let (w, h) = (372, 246 + CAPTION_H);
     let (x, y) = ((desktop_w() as i32 - w) / 2, (desktop_h() as i32 - h) / 2);
@@ -1633,7 +1633,7 @@ pub unsafe extern "stdcall" fn GetDlgItemTextA(dlg: u32, id: u32, buf: *mut u8, 
     }
 }
 
-// ---- strings, texto e métricas ------------------------------------------------------------
+// ---- strings, text and metrics ------------------------------------------------------------
 
 #[allow(non_snake_case)]
 pub unsafe extern "stdcall" fn LoadStringA(inst: u32, id: u32, buf: *mut u8, max: i32) -> i32 {
@@ -1641,7 +1641,7 @@ pub unsafe extern "stdcall" fn LoadStringA(inst: u32, id: u32, buf: *mut u8, max
     let Some((_, mut p, _)) = resources::find(base, &resources::ResId::Id(resources::RT_STRING), &resources::ResId::Id(id / 16 + 1)) else {
         return 0;
     };
-    // Bloco de 16 strings: cada uma é [comprimento u16][UTF-16 sem NUL].
+    // Block of 16 strings: each one is [length u16][UTF-16 without NUL].
     for i in 0..16 {
         let len = r16(p);
         if i == id % 16 {
@@ -1725,7 +1725,7 @@ pub unsafe extern "stdcall" fn DrawTextA(hdc: u32, s: *const u8, n: i32, rect: *
     lh
 }
 
-// ---- entrada e miscelânea (stubs até existir entrada real) --------------------------------
+// ---- input and miscellaneous (stubs until real input exists) ------------------------------
 
 #[allow(non_snake_case)]
 pub extern "stdcall" fn MessageBeep(_kind: u32) -> i32 {
@@ -1758,9 +1758,9 @@ pub unsafe extern "stdcall" fn LoadBitmapA(inst: u32, name: u32) -> u32 {
     }
 }
 
-// ---- geometria e atributos de janela ------------------------------------------------------
+// ---- window geometry and attributes -------------------------------------------------------
 
-/// Origem (em coordenadas de tela) da área cliente de `hwnd`.
+/// Origin (in screen coordinates) of the client area of `hwnd`.
 pub fn client_origin(s: &State, hwnd: u32) -> (i32, i32) {
     let Some(w) = s.windows.get(&hwnd) else { return (0, 0) };
     if w.style & WS_CHILD != 0 {
@@ -1925,7 +1925,7 @@ pub unsafe extern "stdcall" fn GetClassNameA(hwnd: u32, buf: *mut u8, max: i32) 
 
 #[allow(non_snake_case)]
 pub unsafe extern "stdcall" fn IsDialogMessageA(dlg: u32, msg: *const u32) -> i32 {
-    // Se a mensagem é do diálogo ou de um descendente, despacha e devolve TRUE (como o Windows).
+    // If the message belongs to the dialog or a descendant, dispatches it and returns TRUE (as Windows does).
     let (hwnd, m, w, l) = (*msg, *msg.add(1), *msg.add(2), *msg.add(3));
     if hwnd == 0 || (hwnd != dlg && IsChild(dlg, hwnd) == 0) {
         return 0;
@@ -1956,7 +1956,7 @@ pub extern "stdcall" fn SetMenu(hwnd: u32, hmenu: u32) -> i32 {
         win.menu = hmenu;
         (x, y, w, h) = (win.x, win.y, win.w, win.h);
     }
-    MoveWindow(hwnd, x, y, w, h, 1); // recalcula a área cliente
+    MoveWindow(hwnd, x, y, w, h, 1); // recalculates the client area
     1
 }
 
@@ -1965,7 +1965,7 @@ pub extern "stdcall" fn GetMenu(hwnd: u32) -> u32 {
     STATE.lock().unwrap().windows.get(&hwnd).map_or(0, |w| w.menu)
 }
 
-/// Estado anterior do item (flags) ou -1 se não existir.
+/// Previous state of the item (flags) or -1 if it does not exist.
 fn item_flags(menu_h: u32, id: u32, flags: u32, set: u32, mask: u32) -> i32 {
     menu::with_item(menu_h, id, flags & menu::MF_BYPOSITION != 0, |it| {
         let prev = it.flags & mask;
@@ -2011,7 +2011,7 @@ pub extern "stdcall" fn GetMenuItemID(m: u32, pos: i32) -> u32 {
     menu::items(m).get(pos as usize).map_or(u32::MAX, |i| if i.sub != 0 { u32::MAX } else { i.id })
 }
 
-// ---- retângulos, props, hooks e miscelânea ------------------------------------------------
+// ---- rectangles, props, hooks and miscellaneous -------------------------------------------
 
 #[allow(non_snake_case)]
 pub unsafe extern "stdcall" fn AdjustWindowRect(r: *mut i32, style: u32, has_menu: i32) -> i32 {
@@ -2047,7 +2047,7 @@ pub unsafe extern "stdcall" fn RemovePropA(hwnd: u32, name: u32) -> u32 {
 
 #[allow(non_snake_case)]
 pub extern "stdcall" fn SetWindowsHookExA(_id: i32, _proc: u32, _inst: u32, _tid: u32) -> u32 {
-    0x5001 // hooks ainda não são chamados
+    0x5001 // hooks are not called yet
 }
 
 #[allow(non_snake_case)]
@@ -2110,7 +2110,7 @@ pub extern "stdcall" fn GetDlgCtrlID(hwnd: u32) -> i32 {
     STATE.lock().unwrap().windows.get(&hwnd).map_or(0, |w| w.id as i32)
 }
 
-/// WndProc das classes nativas (button, edit...), acessível ao programa para subclassing.
+/// WndProc of the native classes (button, edit...), available to the program for subclassing.
 extern "stdcall" fn builtin_wndproc(hwnd: u32, msg: u32, w: u32, l: u32) -> u32 {
     builtin_proc(hwnd, msg, w, l)
 }
@@ -2125,7 +2125,7 @@ pub unsafe extern "stdcall" fn GetClassInfoA(_inst: u32, name: u32, wc: *mut u32
         s.classes.get(&n).map(|c| c.raw)
     };
     if let Some(mut raw) = raw {
-        raw[9] = name; // lpszClassName aponta para o nome pedido
+        raw[9] = name; // lpszClassName points to the requested name
         std::ptr::copy_nonoverlapping(raw.as_ptr(), wc, 10);
         return 1;
     }
@@ -2159,7 +2159,7 @@ pub unsafe extern "stdcall" fn IntersectRect(dst: *mut i32, a: *const i32, b: *c
     }
 }
 
-// ---- strings ANSI, retângulos, menus dinâmicos --------------------------------------------
+// ---- ANSI strings, rectangles, dynamic menus ----------------------------------------------
 
 #[allow(non_snake_case)]
 pub unsafe extern "stdcall" fn CharNextA(p: *const u8) -> *const u8 {
@@ -2173,7 +2173,7 @@ pub unsafe extern "stdcall" fn CharPrevA(start: *const u8, cur: *const u8) -> *c
 
 #[allow(non_snake_case)]
 pub unsafe extern "stdcall" fn CharLowerA(p: u32) -> u32 {
-    if p < 0x10000 { return (p as u8).to_ascii_lowercase() as u32 } // caractere único passado no valor
+    if p < 0x10000 { return (p as u8).to_ascii_lowercase() as u32 } // single character passed by value
     let mut q = p as usize as *mut u8;
     while *q != 0 { *q = (*q).to_ascii_lowercase(); q = q.add(1) }
     p
@@ -2219,7 +2219,7 @@ pub unsafe extern "stdcall" fn CharLowerBuffW(p: *mut u16, n: u32) -> u32 {
 
 #[allow(non_snake_case)]
 pub unsafe extern "stdcall" fn CharToOemA(src: *const u8, dst: *mut u8) -> i32 {
-    OemToCharA(src, dst) // mesma cópia: sem conversão de página de código
+    OemToCharA(src, dst) // same copy: no code page conversion
 }
 
 #[allow(non_snake_case)]
@@ -2289,7 +2289,7 @@ pub extern "stdcall" fn CreateMenu() -> u32 {
 
 #[allow(non_snake_case)]
 pub unsafe extern "stdcall" fn AppendMenuA(m: u32, flags: u32, id: u32, text: u32) -> i32 {
-    // MF_STRING = 0; para separadores/owner-draw `text` não é string
+    // MF_STRING = 0; for separators/owner-draw `text` is not a string
     let label = if flags & (menu::MF_SEPARATOR | 0x100 | 0x4) == 0 && text != 0 { cstr(text) } else { String::new() };
     menu::append(m, flags, id, label) as i32
 }
@@ -2326,7 +2326,7 @@ pub extern "stdcall" fn GetDialogBaseUnits() -> u32 {
     ((y as u32) << 16) | x as u32
 }
 
-/// Troca o WndProc de uma janela; devolve o anterior. `is16` marca ponteiro far de 16 bits.
+/// Replaces the WndProc of a window; returns the previous one. `is16` marks a 16-bit far pointer.
 pub fn set_wndproc(hwnd: u32, f: u32, is16: bool) -> u32 {
     let mut s = STATE.lock().unwrap();
     match s.windows.get_mut(&hwnd) {
@@ -2338,12 +2338,12 @@ pub fn set_wndproc(hwnd: u32, f: u32, is16: bool) -> u32 {
     }
 }
 
-/// Nome da classe de uma janela ("" se não existir).
+/// Class name of a window ("" if it does not exist).
 pub fn class_of(hwnd: u32) -> String {
     STATE.lock().unwrap().windows.get(&hwnd).map(|w| w.class.clone()).unwrap_or_default()
 }
 
-/// Dá o foco inicial a um controle de diálogo (sem enviar mensagens).
+/// Gives initial focus to a dialog control (without sending messages).
 pub fn set_focus_hint(hwnd: u32) {
     STATE.lock().unwrap().focus = hwnd;
 }

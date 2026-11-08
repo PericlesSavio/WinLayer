@@ -1,6 +1,6 @@
-//! Direct3D 6 (IDirect3D3 e companhia) — por enquanto só rastreamento: os objetos existem, aceitam as
-//! chamadas e registram tudo com `WINLAYER_D3D_TRACE=1`, sem desenhar. Serve para medir o que os jogos
-//! usam antes de escrever o rasterizador.
+//! Direct3D 6 (IDirect3D3 and friends) — tracing only for now: the objects exist, accept
+//! calls and log everything with `WINLAYER_D3D_TRACE=1`, without drawing. Used to measure what games
+//! use before writing the rasterizer.
 
 use std::collections::BTreeMap;
 use std::sync::{Mutex, OnceLock};
@@ -8,7 +8,7 @@ use std::sync::{Mutex, OnceLock};
 const OK: u32 = 0;
 const E_NOINTERFACE: u32 = 0x8000_4002;
 
-/// IID_IDirect3D3 e IID_IDirect3DTexture2 (primeiro dword).
+/// IID_IDirect3D3 and IID_IDirect3DTexture2 (first dword).
 pub const IID_D3D3: u32 = 0xBB22_3240;
 pub const IID_TEXTURE2: u32 = 0x9328_1502;
 
@@ -30,7 +30,7 @@ macro_rules! vtable {
     }};
 }
 
-/// Método sem efeito, registrado; a quantidade de argumentos tem de ser a real (stdcall).
+/// No-op method, logged; the argument count must be the real one (stdcall).
 macro_rules! m {
     ($($name:ident = $ret:expr, ($($a:ident),*);)*) => {
         $(extern "stdcall" fn $name(this: u32 $(, $a: u32)*) -> u32 {
@@ -69,8 +69,8 @@ extern "stdcall" fn release(_t: u32) -> u32 {
 unsafe extern "stdcall" fn qi(this: u32, riid: u32, out: *mut u32) -> u32 {
     let first = if riid == 0 { 0 } else { rd(riid, 0) };
     log("QueryInterface", this, &[first]);
-    // IUnknown, IDirect3D3, Viewport/2/3, Device3, Material/2/3, Light, Texture2: as versões novas
-    // estendem as antigas na mesma ordem, então cada objeto serve para todas.
+    // IUnknown, IDirect3D3, Viewport/2/3, Device3, Material/2/3, Light, Texture2: the new versions
+    // extend the old ones in the same order, so each object serves for all of them.
     if matches!(first, 0 | IID_D3D3 | 0x4417_C146 | 0x9328_1500 | 0xB0AB_3B61 | 0xB0AB_3B60 | 0x4417_C144 | 0x9328_1503 | 0xCA9C_46F4 | 0x4417_C142 | IID_TEXTURE2) {
         *out = this;
         OK
@@ -98,7 +98,7 @@ m! {
     d3_evict = OK, ();
 }
 
-/// D3DDEVICEDESC (DX6, 252 bytes) de um rasterizador por software.
+/// D3DDEVICEDESC (DX6, 252 bytes) of a software rasterizer.
 fn device_desc(software: bool) -> [u8; 252] {
     let mut d = [0u8; 252];
     let mut w = |o: usize, v: u32| d[o..o + 4].copy_from_slice(&v.to_le_bytes());
@@ -106,7 +106,7 @@ fn device_desc(software: bool) -> [u8; 252] {
     if software {
         w(4, 0x7FF);
         w(8, 2); // D3DCOLOR_RGB
-        w(12, 0x1 | 0x10 | 0x40 | 0x100 | 0x400); // FLOATTLVERTEX, EXECUTE/TLVERTEX/TEXTURE em memória do sistema, DRAWPRIMTLVERTEX
+        w(12, 0x1 | 0x10 | 0x40 | 0x100 | 0x400); // FLOATTLVERTEX, EXECUTE/TLVERTEX/TEXTURE in system memory, DRAWPRIMTLVERTEX
         for base in [44usize, 100] {
             w(base, 56);
             w(base + 8, 0x1FF); // dwRasterCaps
@@ -121,7 +121,7 @@ fn device_desc(software: bool) -> [u8; 252] {
             w(base + 44, 0x1F); // dwTextureAddressCaps
         }
         w(156, 0x400 | 0x100); // DDBD_16 | DDBD_32
-        w(160, 0x400); // z-buffer de 16 bits
+        w(160, 0x400); // 16-bit z-buffer
         w(168, 0xFFFF); // dwMaxVertexCount
         w(172, 1);
         w(176, 1);
@@ -167,7 +167,7 @@ unsafe extern "stdcall" fn d3_create_light(this: u32, out: u32, outer: u32) -> u
     OK
 }
 
-/// Memória dos vertex buffers (objeto -> bloco).
+/// Vertex buffer memory (object -> block).
 static VBS: Mutex<BTreeMap<u32, Vec<u8>>> = Mutex::new(BTreeMap::new());
 
 unsafe extern "stdcall" fn d3_create_vb(this: u32, desc: u32, out: u32, flags: u32, outer: u32) -> u32 {
@@ -178,7 +178,7 @@ unsafe extern "stdcall" fn d3_create_vb(this: u32, desc: u32, out: u32, flags: u
     OK
 }
 
-/// Formatos de z-buffer: 16 bits.
+/// Z-buffer formats: 16-bit.
 unsafe extern "stdcall" fn d3_enum_z(this: u32, clsid: u32, cb: u32, ctx: u32) -> u32 {
     log("d3_enum_z", this, &[rd(clsid, 0), cb, ctx]);
     if cb != 0 {
@@ -256,7 +256,7 @@ unsafe extern "stdcall" fn dv_get_d3d(this: u32, out: u32) -> u32 {
     OK
 }
 
-/// Formatos de textura oferecidos: RGB 565, ARGB 1555, ARGB 4444 e ARGB 8888.
+/// Texture formats offered: RGB 565, ARGB 1555, ARGB 4444 and ARGB 8888.
 unsafe extern "stdcall" fn dv_enum_tex(this: u32, cb: u32, ctx: u32) -> u32 {
     log("dv_enum_tex", this, &[cb, ctx]);
     if cb != 0 {
@@ -271,17 +271,17 @@ unsafe extern "stdcall" fn dv_enum_tex(this: u32, cb: u32, ctx: u32) -> u32 {
     OK
 }
 
-/// Registra um desenho com o primeiro vértice em hexadecimal (para descobrir o formato usado).
+/// Logs a draw call with the first vertex in hexadecimal (to find out the format in use).
 unsafe fn log_verts(name: &str, this: u32, fvf: u32, verts: u32, args: &[u32]) {
     log(name, this, args);
     if trace() && verts != 0 {
         let stride = fvf_size(fvf);
         let v: Vec<String> = (0..stride / 4).map(|i| format!("{:08x}", rd(verts, i * 4))).collect();
-        eprintln!("[d3d]   vértice[0] tamanho={stride}: {}", v.join(" "));
+        eprintln!("[d3d]   vertex[0] size={stride}: {}", v.join(" "));
     }
 }
 
-/// Tamanho do vértice pelo FVF (ou pelos tipos antigos D3DVT_*: 1, 2, 3).
+/// Vertex size from the FVF (or from the old D3DVT_* types: 1, 2, 3).
 fn fvf_size(fvf: u32) -> u32 {
     match fvf {
         1..=3 => 32,
@@ -303,7 +303,7 @@ unsafe extern "stdcall" fn dv_draw_indexed(this: u32, pt: u32, fvf: u32, verts: 
     OK
 }
 
-// ---- viewport, material, luz, textura, vertex buffer --------------------------------------------
+// ---- viewport, material, light, texture, vertex buffer ------------------------------------------
 
 fn viewport_vtbl() -> &'static [u32] {
     vtable![qi, addref, release, vp_init, vp_get, vp_set, vp_transform, vp_light_el, vp_set_bg, vp_get_bg, vp_set_bgd, vp_get_bgd,
@@ -357,7 +357,7 @@ fn vb_vtbl() -> &'static [u32] {
     vtable![qi, addref, release, vb_lock, vb_unlock, vb_process, vb_desc, vb_optimize]
 }
 
-/// GetHandle de material e textura: o handle é o próprio objeto.
+/// GetHandle for material and texture: the handle is the object itself.
 unsafe extern "stdcall" fn handle(this: u32, dev: u32, out: u32) -> u32 {
     log("GetHandle", this, &[dev]);
     put(out, this);
@@ -373,7 +373,7 @@ unsafe extern "stdcall" fn vb_lock(this: u32, flags: u32, ptr: u32, size: u32) -
     OK
 }
 
-/// Copia a textura `src` para esta (as superfícies têm o mesmo tamanho).
+/// Copies texture `src` to this one (the surfaces have the same size).
 unsafe extern "stdcall" fn tx_load(this: u32, src: u32) -> u32 {
     log("tx_load", this, &[src]);
     let (d, s) = {
@@ -387,7 +387,7 @@ unsafe extern "stdcall" fn tx_load(this: u32, src: u32) -> u32 {
     }
 }
 
-/// Estados de luz (D3DLIGHTSTATE_*), devolvidos como foram gravados.
+/// Light states (D3DLIGHTSTATE_*), returned as they were stored.
 static LIGHT_STATE: Mutex<BTreeMap<u32, u32>> = Mutex::new(BTreeMap::new());
 
 unsafe extern "stdcall" fn dv_get_ls(this: u32, ty: u32, out: u32) -> u32 {
@@ -402,7 +402,7 @@ extern "stdcall" fn dv_set_ls(this: u32, ty: u32, v: u32) -> u32 {
     OK
 }
 
-/// IDirect3DTexture2 de uma superfície (objeto -> superfície, um por superfície).
+/// IDirect3DTexture2 of a surface (object -> surface, one per surface).
 static TEXTURES: Mutex<BTreeMap<u32, u32>> = Mutex::new(BTreeMap::new());
 
 pub fn texture_for(surface: u32) -> u32 {

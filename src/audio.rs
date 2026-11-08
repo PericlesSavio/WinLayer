@@ -1,6 +1,6 @@
-//! Áudio: o `winlayer` não fala com a placa de som; ele publica eventos ("tocar o som N") e o
-//! visualizador do navegador reproduz com Web Audio. Aqui ficam o catálogo de sons (arquivos WAV
-//! inteiros), a fila de eventos e utilitários de WAV.
+//! Audio: `winlayer` does not talk to the sound card; it publishes events ("play sound N") and the
+//! browser viewer plays them with Web Audio. This holds the sound catalog (whole WAV
+//! files), the event queue and WAV utilities.
 
 use std::collections::{BTreeMap, VecDeque};
 use std::sync::{Arc, Mutex};
@@ -9,14 +9,14 @@ struct State {
     sounds: BTreeMap<usize, Arc<Vec<u8>>>,
     by_path: BTreeMap<String, usize>,
     next_id: usize,
-    /// Eventos pendentes para o visualizador: (sequência, linha).
+    /// Pending events for the viewer: (sequence, line).
     events: VecDeque<(u64, String)>,
     seq: u64,
 }
 
 static STATE: Mutex<State> = Mutex::new(State { sounds: BTreeMap::new(), by_path: BTreeMap::new(), next_id: 1, events: VecDeque::new(), seq: 0 });
 
-/// Quantos sons "de fluxo" (waveOut) guardar antes de descartar os mais antigos.
+/// How many "stream" sounds (waveOut) to keep before discarding the oldest.
 const STREAM_KEEP: usize = 64;
 
 fn is_wav(b: &[u8]) -> bool {
@@ -36,7 +36,7 @@ fn push_event(s: &mut State, line: String) {
     }
 }
 
-/// Registra um WAV (arquivo inteiro na memória); `key` evita duplicar o mesmo arquivo.
+/// Registers a WAV (entire file in memory); `key` avoids duplicating the same file.
 fn register(bytes: Vec<u8>, key: Option<String>, stream: bool) -> Option<usize> {
     if !is_wav(&bytes) {
         return None;
@@ -54,7 +54,7 @@ fn register(bytes: Vec<u8>, key: Option<String>, stream: bool) -> Option<usize> 
         s.by_path.insert(k, id);
     }
     if stream {
-        // descarta os fluxos mais antigos (os sons de arquivo ficam)
+        // discards the oldest streams (file sounds stay)
         let cached: Vec<usize> = s.by_path.values().copied().collect();
         let old: Vec<usize> = s.sounds.keys().copied().filter(|i| !cached.contains(i)).collect();
         if old.len() > STREAM_KEEP {
@@ -66,7 +66,7 @@ fn register(bytes: Vec<u8>, key: Option<String>, stream: bool) -> Option<usize> 
     Some(id)
 }
 
-/// Duração aproximada em ms de um WAV (campo `avgBytesPerSec` e tamanho do chunk `data`).
+/// Approximate duration in ms of a WAV (`avgBytesPerSec` field and size of the `data` chunk).
 pub fn duration_ms(wav: &[u8]) -> u32 {
     let (mut avg, mut data) = (0u32, 0u32);
     let mut p = 12;
@@ -82,7 +82,7 @@ pub fn duration_ms(wav: &[u8]) -> u32 {
     if avg == 0 { 0 } else { (data as u64 * 1000 / avg as u64) as u32 }
 }
 
-/// Toca um arquivo WAV do disco (caminho do host). `looped` repete até `stop`.
+/// Plays a WAV file from disk (host path). `looped` repeats until `stop`.
 pub fn play_file(path: &std::path::Path, looped: bool) -> bool {
     let key = path.to_string_lossy().into_owned();
     let cached = STATE.lock().unwrap().by_path.get(&key).copied();
@@ -97,18 +97,18 @@ pub fn play_file(path: &std::path::Path, looped: bool) -> bool {
     true
 }
 
-/// Toca um WAV que já está na memória (SND_MEMORY).
+/// Plays a WAV already in memory (SND_MEMORY).
 pub fn play_memory(bytes: Vec<u8>, looped: bool) -> bool {
     match register(bytes, None, true) {
         Some(id) => {
-            emit(id, if looped { "loop" } else { "once" }, "(memória)");
+            emit(id, if looped { "loop" } else { "once" }, "(memory)");
             true
         }
         None => false,
     }
 }
 
-/// Fluxo de PCM (waveOut): os blocos tocam em sequência. Devolve a duração em ms.
+/// PCM stream (waveOut): the blocks play in sequence. Returns the duration in ms.
 pub fn play_stream(fmt: &[u8], pcm: &[u8]) -> u32 {
     let wav = pcm_to_wav(fmt, pcm);
     let dur = duration_ms(&wav);
@@ -135,7 +135,7 @@ pub fn stop() {
     push_event(&mut s, "stop|0|once".into());
 }
 
-/// Bipe curto sintetizado (MessageBeep).
+/// Short synthesized beep (MessageBeep).
 pub fn beep() {
     let rate = 22050u32;
     let n = (rate as usize * 120) / 1000;
@@ -156,7 +156,7 @@ pub fn beep() {
     play_memory(pcm_to_wav(&fmt, &pcm), false);
 }
 
-/// Monta um WAV a partir de um WAVEFORMAT/WAVEFORMATEX (usa os 16 primeiros bytes) e dados PCM.
+/// Builds a WAV from a WAVEFORMAT/WAVEFORMATEX (uses the first 16 bytes) and PCM data.
 pub fn pcm_to_wav(fmt: &[u8], pcm: &[u8]) -> Vec<u8> {
     let fmt = &fmt[..fmt.len().min(16)];
     let mut w = Vec::with_capacity(44 + pcm.len());
@@ -171,7 +171,7 @@ pub fn pcm_to_wav(fmt: &[u8], pcm: &[u8]) -> Vec<u8> {
     w
 }
 
-// ---- lado do visualizador ----------------------------------------------------------------------
+// ---- viewer side -------------------------------------------------------------------------------
 
 pub fn wav_bytes(id: usize) -> Option<Arc<Vec<u8>>> {
     STATE.lock().unwrap().sounds.get(&id).cloned()
@@ -181,7 +181,7 @@ pub fn seq() -> u64 {
     STATE.lock().unwrap().seq
 }
 
-/// Eventos com sequência > `since`, uma linha por evento no formato `seq|op|id|modo`.
+/// Events with sequence > `since`, one line per event in the format `seq|op|id|mode`.
 pub fn events_since(since: u64) -> String {
     let s = STATE.lock().unwrap();
     s.events.iter().filter(|(q, _)| *q > since).map(|(q, l)| format!("{q}|{l}\n")).collect()

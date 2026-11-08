@@ -1,4 +1,4 @@
-//! GDI.EXE do Windows 3.x, sobre o `win32::gdi32` (handles de 16 bits, COLORREF em DWORD).
+//! Windows 3.x GDI.EXE, on top of `win32::gdi32` (16-bit handles, COLORREF in a DWORD).
 
 use super::api::{Call, Impl};
 use super::user::{pack, rect16};
@@ -43,12 +43,12 @@ fn create_pattern_brush(c: &mut Call) -> u32 {
     gdi32::CreatePatternBrush(c.w(0) as u32)
 }
 
-/// Fonte lógica a partir do nome da face e da altura pedidos: usa uma fonte bitmap carregada
-/// (AddFontResource) se houver uma com esse nome; senão, a embutida (só o peso).
+/// Logical font from the requested face name and height: uses a loaded bitmap font
+/// (AddFontResource) if one has that name; otherwise, the built-in one (weight only).
 fn make_font(height: i32, weight: i32, face: u32) -> u32 {
     if face != 0 {
         if std::env::var_os("WINLAYER_GDI_TRACE").is_some() {
-            eprintln!("[gdi] CreateFont altura={height} peso={weight} face={:?}", unsafe { std::ffi::CStr::from_ptr(face as usize as *const i8) });
+            eprintln!("[gdi] CreateFont height={height} weight={weight} face={:?}", unsafe { std::ffi::CStr::from_ptr(face as usize as *const i8) });
         }
         let name = unsafe { std::ffi::CStr::from_ptr(face as usize as *const i8) }.to_string_lossy().into_owned();
         let idx = crate::win32::fnt::find(&name, height);
@@ -66,7 +66,7 @@ fn create_font(c: &mut Call) -> u32 {
 
 fn create_font_indirect(c: &mut Call) -> u32 {
     let p = c.ptr(0);
-    let (height, weight) = unsafe { (rd16(p) as i32, rd16(p + 8) as i32) }; // LOGFONT de 16 bits: lfHeight, ..., lfWeight (5º campo), face em +18
+    let (height, weight) = unsafe { (rd16(p) as i32, rd16(p + 8) as i32) }; // 16-bit LOGFONT: lfHeight, ..., lfWeight (5th field), face at +18
     make_font(height, weight, p + 18)
 }
 
@@ -124,7 +124,7 @@ fn text_out(c: &mut Call) -> u32 {
 fn get_text_extent(c: &mut Call) -> u32 {
     let mut sz = [0i32; 2];
     unsafe { gdi32::GetTextExtentPoint32A(c.w(0) as u32, c.ptr(1) as usize as *const u8, c.s(2) as i32, sz.as_mut_ptr()) };
-    pack(sz[0] as u16, sz[1] as u16) // DWORD: LOWORD = largura, HIWORD = altura
+    pack(sz[0] as u16, sz[1] as u16) // DWORD: LOWORD = width, HIWORD = height
 }
 
 fn get_text_metrics(c: &mut Call) -> u32 {
@@ -177,13 +177,13 @@ fn set_pixel(c: &mut Call) -> u32 {
     gdi32::SetPixel(c.w(0) as u32, c.s(1) as i32, c.s(2) as i32, c.l(3))
 }
 
-// ---- fontes (AddFontResource / EnumFontFamilies) ------------------------------------------------
+// ---- fonts (AddFontResource / EnumFontFamilies) ------------------------------------------------
 
 static FACES: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
-/// Bloco global (LOGFONT16 + TEXTMETRIC16) reutilizado nas chamadas de EnumFontFamilies.
+/// Global block (LOGFONT16 + TEXTMETRIC16) reused in EnumFontFamilies calls.
 static ENUM_BLOCK: std::sync::Mutex<u16> = std::sync::Mutex::new(0);
 
-/// Nomes de família da tabela FONTDIR (tipo 7) de um arquivo de fontes `.FON` (módulo NE).
+/// Family names from the FONTDIR table (type 7) of a `.FON` font file (NE module).
 fn font_faces(d: &[u8]) -> Vec<String> {
     let mut out = Vec::new();
     let u16_at = |o: usize| d.get(o..o + 2).map(|b| u16::from_le_bytes([b[0], b[1]]) as usize);
@@ -210,13 +210,13 @@ fn font_faces(d: &[u8]) -> Vec<String> {
             if tid & 0x7FFF != 7 {
                 continue;
             }
-            // FONTDIR: contagem; por fonte: ordinal(2) + FONTINFO(113) + nome do dispositivo\0 + nome da face\0
+            // FONTDIR: count; per font: ordinal(2) + FONTINFO(113) + device name\0 + face name\0
             let Some(blob) = d.get(o..o + l) else { continue };
             let n = u16::from_le_bytes([blob[0], blob[1]]) as usize;
             let mut q = 2;
             for _ in 0..n {
                 let hdr = q + 2;
-                // o descritor tem o tamanho dfSize no começo? usamos a varredura das duas strings após 113 bytes
+                // does the descriptor have dfSize at the start? we scan the two strings after 113 bytes
                 let s = hdr + 113;
                 if s >= blob.len() {
                     break;
@@ -253,7 +253,7 @@ fn add_font_resource(c: &mut Call) -> u32 {
     n
 }
 
-/// EnumFontFamilies(hdc, família, callback far, lParam): chama o callback para cada família.
+/// EnumFontFamilies(hdc, family, far callback, lParam): calls the callback for each family.
 fn enum_font_families(c: &mut Call) -> u32 {
     let (fam, proc16, lparam) = (c.ptr(1), c.l(2), c.l(3));
     let wanted = if fam == 0 { None } else { Some(unsafe { std::ffi::CStr::from_ptr(fam as usize as *const i8) }.to_string_lossy().into_owned()) };
@@ -276,12 +276,12 @@ fn enum_font_families(c: &mut Call) -> u32 {
         }
         unsafe {
             std::ptr::write_bytes(base as usize as *mut u8, 0, 128);
-            // LOGFONT16 (50 bytes): altura, largura, escape, orientação, peso | itálico... | face[32]
+            // LOGFONT16 (50 bytes): height, width, escapement, orientation, weight | italic... | face[32]
             wr16(base, 12);
             wr16(base + 8, 400);
             let n = name.len().min(31);
             std::ptr::copy_nonoverlapping(name.as_ptr(), (base + 18) as usize as *mut u8, n);
-            // TEXTMETRIC16 (31 bytes) logo depois do LOGFONT
+            // TEXTMETRIC16 (31 bytes) right after the LOGFONT
             wr16(base + 64, 12);
             wr16(base + 66, 10);
             wr16(base + 68, 2);
@@ -317,7 +317,7 @@ fn set_text_align(c: &mut Call) -> u32 {
 }
 
 fn create_palette(_c: &mut Call) -> u32 {
-    0x8002 // handle de paleta simbólico (o desktop é truecolor, sem paleta de hardware)
+    0x8002 // symbolic palette handle (the desktop is truecolor, no hardware palette)
 }
 
 pub static IMPLS: &[Impl] = &[

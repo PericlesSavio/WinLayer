@@ -1,4 +1,4 @@
-//! Primitivas de desenho sobre buffers 0xAARRGGBB, usadas pelos controles nativos.
+//! Drawing primitives on 0xAARRGGBB buffers, used by the native controls.
 
 pub const GRAY: u32 = 0xFFC0_C0C0;
 pub const WHITE: u32 = 0xFFFF_FFFF;
@@ -20,7 +20,7 @@ impl Buf<'_> {
         }
     }
 
-    /// Contorno de 1 px com cor superior/esquerda `tl` e inferior/direita `br`.
+    /// 1 px outline with top/left color `tl` and bottom/right color `br`.
     pub fn frame(&mut self, l: i32, t: i32, r: i32, b: i32, tl: u32, br: u32) {
         self.fill(l, t, r - 1, t + 1, tl);
         self.fill(l, t, l + 1, b - 1, tl);

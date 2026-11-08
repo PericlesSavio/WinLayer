@@ -1,9 +1,9 @@
-//! Interrupções de software (INT n) executadas pelo código de 16 bits. No Linux elas viram SIGSEGV;
-//! o handler decodifica `CD nn`, chama `handle` e retoma a execução depois da instrução.
+//! Software interrupts (INT n) executed by 16-bit code. On Linux they become SIGSEGV;
+//! the handler decodes `CD nn`, calls `handle` and resumes execution after the instruction.
 
 use crate::win32::user32;
 
-/// Registradores salvos no contexto do sinal (ordem do `sigcontext` do i386):
+/// Registers saved in the signal context (i386 `sigcontext` order):
 /// GS FS ES DS EDI ESI EBP ESP EBX EDX ECX EAX TRAPNO ERR EIP CS EFL UESP SS.
 pub struct Regs<'a>(pub &'a mut [u32]);
 
@@ -32,7 +32,7 @@ impl Regs<'_> {
     fn dx(&self) -> u16 {
         self.0[9] as u16
     }
-    /// Caminho ASCIZ em DS:DX.
+    /// ASCIZ path at DS:DX.
     fn path_dsdx(&self) -> Option<String> {
         let p = crate::win16::ldt::linear(self.0[3] as u16, self.dx())?;
         Some(unsafe { std::ffi::CStr::from_ptr(p as usize as *const i8) }.to_string_lossy().into_owned())
@@ -59,11 +59,11 @@ impl Regs<'_> {
 }
 
 fn unimplemented(int: u8, r: &Regs) -> ! {
-    eprintln!("\n[win16] INT {int:02X}h não implementada (AX={:04x})", r.ax());
+    eprintln!("\n[win16] INT {int:02X}h not implemented (AX={:04x})", r.ax());
     crate::win32::kernel32::exit_process(3)
 }
 
-/// Data/hora local simples (UTC) a partir do relógio do sistema.
+/// Simple local date/time (UTC) from the system clock.
 fn clock() -> (u16, u8, u8, u8, u8, u8, u8, u8) {
     let secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs()) as i64;
     let (days, rem) = (secs.div_euclid(86400), secs.rem_euclid(86400));
@@ -82,10 +82,10 @@ fn clock() -> (u16, u8, u8, u8, u8, u8, u8, u8) {
 pub fn handle(int: u8, r: &mut Regs) {
     match int {
         0x1A => match r.ah() {
-            // BIOS: ler contador de ticks (18,2 Hz) desde a meia-noite
+            // BIOS: read tick counter (18.2 Hz) since midnight
             0 => {
-                // Modo captura: cada leitura avança o relógio virtual, então esperas ocupadas (que
-                // chamam `clock()` em laço) terminam logo em vez de levarem segundos reais.
+                // Capture mode: each read advances the virtual clock, so busy waits (which
+                // call `clock()` in a loop) finish quickly instead of taking real seconds.
                 user32::tick_virtual(2);
                 let ms = if user32::shot_mode() { user32::now_ms() } else { user32::real_ms() };
                 let ticks = (ms as u64 * 182_065 / 10_000_000) as u32;
@@ -94,7 +94,7 @@ pub fn handle(int: u8, r: &mut Regs) {
                 r.set_al(0);
             }
             2 => {
-                // RTC: hora em BCD
+                // RTC: time in BCD
                 let (_, _, _, _, h, m, s, _) = clock();
                 let bcd = |v: u8| ((v / 10) << 4) | (v % 10);
                 r.0[10] = ((bcd(h) as u32) << 8) | bcd(m) as u32; // CH:CL
@@ -104,7 +104,7 @@ pub fn handle(int: u8, r: &mut Regs) {
             _ => unimplemented(int, r),
         },
         0x21 => match r.ah() {
-            0x30 => r.set_ax(0x1606), // DOS 6.22 (AL = maior, AH = menor)
+            0x30 => r.set_ax(0x1606), // DOS 6.22 (AL = major, AH = minor)
             0x4C => crate::win32::kernel32::exit_process(r.al() as u32),
             0x2C => {
                 let (_, _, _, _, h, m, s, cs) = clock();
@@ -117,17 +117,17 @@ pub fn handle(int: u8, r: &mut Regs) {
                 r.set_dh_dl(mo, d);
                 r.set_al(dow);
             }
-            0x19 => r.set_al(2), // unidade atual: C:
+            0x19 => r.set_al(2), // current drive: C:
             0x47 => {
-                // diretório atual (DS:SI recebe o caminho sem a letra da unidade e sem `\\` inicial): raiz
+                // current directory (DS:SI receives the path without the drive letter and without a leading `\\`): root
                 if let Some(p) = crate::win16::ldt::linear(r.0[3] as u16, r.0[5] as u16) {
                     unsafe { *(p as usize as *mut u8) = 0 };
                 }
                 r.set_carry(false);
             }
-            0x3B => r.set_carry(false), // chdir: sempre aceito
+            0x3B => r.set_carry(false), // chdir: always accepted
             0x3C | 0x3D => {
-                // criar / abrir (DS:DX = caminho; 3D: AL = modo de acesso)
+                // create / open (DS:DX = path; 3D: AL = access mode)
                 let (create, mode) = (r.ah() == 0x3C, (r.al() & 3) as u16);
                 let Some(path) = r.path_dsdx() else { return r.fail(3) };
                 let h = super::kernel_ext::open_file(&path, create, mode);
@@ -148,7 +148,7 @@ pub fn handle(int: u8, r: &mut Regs) {
                 let done = if r.ah() == 0x3F {
                     super::kernel_ext::read_into(h, buf, n)
                 } else if n == 0 {
-                    // gravar 0 bytes trunca na posição atual
+                    // writing 0 bytes truncates at the current position
                     if super::kernel_ext::dos_truncate_here(h) { 0 } else { 0xFFFF }
                 } else {
                     super::kernel_ext::write_from(h, buf, n)
@@ -176,7 +176,7 @@ pub fn handle(int: u8, r: &mut Regs) {
                 }
             }
             0x43 => {
-                // atributos de arquivo: 0 = ler (CX), 1 = gravar (aceito)
+                // file attributes: 0 = read (CX), 1 = write (accepted)
                 let Some(path) = r.path_dsdx() else { return r.fail(3) };
                 let p = crate::win32::files::host_path(&path);
                 match std::fs::metadata(&p) {
@@ -190,20 +190,20 @@ pub fn handle(int: u8, r: &mut Regs) {
                 }
             }
             0x36 => {
-                // espaço livre: 8 setores/cluster, 512 bytes/setor, ~128 MB livres
+                // free space: 8 sectors/cluster, 512 bytes/sector, ~128 MB free
                 r.set_ax(8);
                 r.set_bx(0x7000);
                 r.set_cx(512);
                 r.set_dx(0x7000);
             }
             0x44 => {
-                // IOCTL: informação do dispositivo -> arquivo comum
+                // IOCTL: device information -> regular file
                 r.set_dx(0);
                 r.set_ax(0);
                 r.set_carry(false);
             }
             0x57 => {
-                // data/hora do arquivo: devolve a data/hora atual
+                // file date/time: returns the current date/time
                 let (y, mo, d, _, h, mi, s, _) = clock();
                 if r.al() == 0 {
                     r.set_cx(((h as u16) << 11) | ((mi as u16) << 5) | (s as u16 / 2));
@@ -216,11 +216,11 @@ pub fn handle(int: u8, r: &mut Regs) {
                 r.set_bx(0);
                 r.0[2] = 0; // ES = 0
             }
-            0x62 | 0x51 => r.set_bx(crate::win16::kernel::with_process(|p| p.psp_sel)), // PSP atual
+            0x62 | 0x51 => r.set_bx(crate::win16::kernel::with_process(|p| p.psp_sel)), // current PSP
             _ => unimplemented(int, r),
         },
         0x2F | 0x31 => {
-            r.set_carry(true); // sem multiplex/DPMI: "não suportado"
+            r.set_carry(true); // no multiplex/DPMI: "not supported"
         }
         _ => unimplemented(int, r),
     }

@@ -1,4 +1,4 @@
-//! Fonte bitmap embutida (ver `assets/README.md`) e desenho de texto em buffers de pixels.
+//! Built-in bitmap font (see `assets/README.md`) and text drawing on pixel buffers.
 
 static REGULAR: &[u8] = include_bytes!("../../assets/font_regular.bin");
 static BOLD: &[u8] = include_bytes!("../../assets/font_bold.bin");
@@ -9,18 +9,18 @@ const HEADER: usize = 2;
 const ENTRY: usize = 8;
 
 pub const ASCENT: i32 = 10;
-/// Altura de linha usada nas métricas (tmHeight).
+/// Line height used in the metrics (tmHeight).
 pub const LINE_H: i32 = 13;
 
-/// Programa Win16: a fonte padrão dos DCs é a "System" do Windows 3.1 (altura 16, largura média 8),
-/// maior que a embutida; os programas medem o texto com ela antes de escolher a fonte própria.
+/// Win16 program: the default DC font is the Windows 3.1 "System" font (height 16, average width 8),
+/// larger than the built-in one; programs measure text with it before choosing their own font.
 pub static WIN16: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 fn win16() -> bool {
     WIN16.load(std::sync::atomic::Ordering::Relaxed)
 }
 
-/// Altura de linha e ascendente da fonte embutida (conforme o modo).
+/// Line height and ascent of the built-in font (depending on the mode).
 pub fn line_h() -> i32 {
     if win16() { 16 } else { LINE_H }
 }
@@ -55,13 +55,13 @@ fn glyph(bold: bool, ch: u8) -> Option<Glyph<'static>> {
     Some(Glyph { adv, left, w, h, top, bits: &f[start..start + len] })
 }
 
-/// Largura em pixels, ignorando `&` (mnemônico) como o Windows faz em controles.
+/// Width in pixels, ignoring `&` (mnemonic) as Windows does in controls.
 pub fn width(bold: bool, s: &[u8]) -> i32 {
     let extra = win16() as i32;
     s.iter().filter_map(|&c| glyph(bold, c)).map(|g| g.adv + extra).sum()
 }
 
-/// Desenha `s` com o canto superior esquerdo em (x, y). Devolve a largura desenhada.
+/// Draws `s` with the top-left corner at (x, y). Returns the drawn width.
 pub fn draw(px: &mut [u32], bw: i32, bh: i32, x: i32, y: i32, s: &[u8], color: u32, bold: bool) -> i32 {
     let mut pen = x;
     for &c in s {
@@ -82,7 +82,7 @@ pub fn draw(px: &mut [u32], bw: i32, bh: i32, x: i32, y: i32, s: &[u8], color: u
     pen - x
 }
 
-/// Remove `&` de mnemônicos ("&OK" -> "OK"; "&&" -> "&").
+/// Removes mnemonic `&` ("&OK" -> "OK"; "&&" -> "&").
 pub fn strip_mnemonic(s: &str) -> Vec<u8> {
     let mut out = Vec::new();
     let b = s.as_bytes();

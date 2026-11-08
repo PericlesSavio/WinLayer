@@ -1,4 +1,4 @@
-//! KERNEL.EXE do Windows 3.x: inicialização de tarefa, memória global/local, módulos e arquivos.
+//! Windows 3.x KERNEL.EXE: task startup, global/local memory, modules and files.
 
 use super::api::{far, Call, Impl};
 use super::ldt::{self, Kind};
@@ -11,7 +11,7 @@ extern "C" {
     fn munmap(addr: *mut c_void, len: usize) -> i32;
 }
 
-/// Dados do processo Win16 em execução.
+/// Data of the running Win16 process.
 pub struct Process {
     pub dgroup_sel: u16,
     pub dgroup_base: u32,
@@ -29,10 +29,10 @@ pub fn set_process(p: Process) {
 }
 
 pub fn with_process<R>(f: impl FnOnce(&Process) -> R) -> R {
-    f(PROCESS.lock().unwrap().as_ref().expect("processo Win16 não inicializado"))
+    f(PROCESS.lock().unwrap().as_ref().expect("Win16 process not initialized"))
 }
 
-// ---- memória global -----------------------------------------------------------------------
+// ---- global memory -----------------------------------------------------------------------
 
 struct Block {
     base: u32,
@@ -42,7 +42,7 @@ struct Block {
 
 static BLOCKS: Mutex<BTreeMap<u16, Block>> = Mutex::new(BTreeMap::new());
 
-/// Aloca um bloco global zerado; o "handle" é o seletor (blocos > 64 KiB usam uma corrida de seletores).
+/// Allocates a zeroed global block; the "handle" is the selector (blocks > 64 KiB use a run of selectors).
 pub fn global_alloc(size: u32) -> Option<u16> {
     let size = size.max(1);
     let mem = map_rwx((size as usize).div_ceil(4096) * 4096);
@@ -50,8 +50,8 @@ pub fn global_alloc(size: u32) -> Option<u16> {
         return None;
     }
     let base = mem as usize as u32;
-    // O Windows 3.1 arredondava blocos globais para parágrafos de 16 bytes: o limite do seletor inclui a folga
-    // (programas leem um byte além do fim, ex.: laços de soma/cópia).
+    // Windows 3.1 rounded global blocks up to 16-byte paragraphs: the selector limit includes the slack
+    // (programs read one byte past the end, e.g. sum/copy loops).
     let limit_size = size.checked_add(15).map_or(size, |v| v & !15);
     let sel = ldt::alloc_run(base, limit_size, Kind::Data16).ok()?;
     BLOCKS.lock().unwrap().insert(sel, Block { base, size, chunks: limit_size.div_ceil(0x1_0000) });
@@ -62,7 +62,7 @@ pub fn global_info(sel: u16) -> Option<(u32, u32)> {
     BLOCKS.lock().unwrap().get(&sel).map(|b| (b.base, b.size))
 }
 
-/// Libera um bloco global (uso por outras partes da camada Win16).
+/// Frees a global block (for use by other parts of the Win16 layer).
 pub fn global_free_pub(sel: u16) -> bool {
     global_free(sel)
 }
@@ -77,11 +77,11 @@ fn global_free(sel: u16) -> bool {
     true
 }
 
-// ---- heap local (dentro do DGROUP) --------------------------------------------------------
+// ---- local heap (inside DGROUP) ----------------------------------------------------------
 
 struct LocalHeap {
     base: u32,
-    /// (offset, tamanho, em uso)
+    /// (offset, size, in use)
     blocks: Vec<(u16, u16, bool)>,
     start: u16,
     end: u16,
@@ -93,7 +93,7 @@ fn local_alloc(bytes: u16, zero: bool) -> u16 {
     let mut g = LOCAL.lock().unwrap();
     let Some(h) = g.as_mut() else { return 0 };
     let need = (bytes.max(1) + 3) & !3;
-    // primeiro bloco livre que caiba
+    // first free block that fits
     if let Some(i) = h.blocks.iter().position(|b| !b.2 && b.1 >= need) {
         let (off, size, _) = h.blocks[i];
         if size > need + 8 {
@@ -115,7 +115,7 @@ fn local_free(off: u16) -> bool {
     let Some(h) = g.as_mut() else { return false };
     let Some(i) = h.blocks.iter().position(|b| b.0 == off && b.2) else { return false };
     h.blocks[i].2 = false;
-    // junta vizinhos livres
+    // merges free neighbors
     let mut k = 0;
     while k + 1 < h.blocks.len() {
         if !h.blocks[k].2 && !h.blocks[k + 1].2 {
@@ -132,7 +132,7 @@ fn local_size(off: u16) -> u16 {
     LOCAL.lock().unwrap().as_ref().and_then(|h| h.blocks.iter().find(|b| b.0 == off && b.2).map(|b| b.1)).unwrap_or(0)
 }
 
-// ---- tratadores ---------------------------------------------------------------------------
+// ---- handlers -----------------------------------------------------------------------------
 
 const GMEM_ZEROINIT: u16 = 0x40;
 const LMEM_ZEROINIT: u16 = 0x40;
@@ -141,8 +141,8 @@ fn pack(ax: u16, dx: u16) -> u32 {
     ax as u32 | (dx as u32) << 16
 }
 
-/// INITTASK: devolve ES:BX = linha de comando (no PSP), CX = limite da pilha, DX = nCmdShow,
-/// SI = hPrevInstance, DI = hInstance; AX != 0 indica sucesso.
+/// INITTASK: returns ES:BX = command line (in the PSP), CX = stack limit, DX = nCmdShow,
+/// SI = hPrevInstance, DI = hInstance; AX != 0 indicates success.
 fn init_task(c: &mut Call) -> u32 {
     with_process(|p| {
         c.set_es(p.psp_sel);
@@ -193,7 +193,7 @@ fn local_realloc_h(c: &mut Call) -> u32 {
 }
 
 fn local_free_h(c: &mut Call) -> u32 {
-    (!local_free(c.w(0))) as u32 // 0 = sucesso
+    (!local_free(c.w(0))) as u32 // 0 = success
 }
 
 fn local_lock(c: &mut Call) -> u32 {
@@ -220,14 +220,14 @@ fn global_alloc_h(c: &mut Call) -> u32 {
 fn global_realloc_h(c: &mut Call) -> u32 {
     let (h, size, flags) = (c.w(0), c.l(1), c.w(2));
     let Some((base, old)) = global_info(h) else { return 0 };
-    let (rsize, rold) = ((size + 15) & !15, (old + 15) & !15); // limites arredondados a parágrafos
+    let (rsize, rold) = ((size + 15) & !15, (old + 15) & !15); // limits rounded to paragraphs
     if rsize.div_ceil(0x1_0000) != rold.div_ceil(0x1_0000) {
-        // Muda o número de seletores: devolve um bloco novo (o handle muda).
+        // Changes the number of selectors: returns a new block (the handle changes).
         let Some(n) = global_alloc(size) else { return 0 };
         let (nb, _) = global_info(n).unwrap();
         unsafe { std::ptr::copy_nonoverlapping(base as usize as *const u8, nb as usize as *mut u8, old.min(size) as usize) };
         global_free(h);
-        eprintln!("[win16] aviso: GlobalReAlloc trocou de seletor ({h:#x} -> {n:#x})");
+        eprintln!("[win16] warning: GlobalReAlloc changed selector ({h:#x} -> {n:#x})");
         return n as u32;
     }
     let mem = map_rwx((size.max(1) as usize).div_ceil(4096) * 4096);
@@ -244,12 +244,12 @@ fn global_realloc_h(c: &mut Call) -> u32 {
 }
 
 fn global_free_h(c: &mut Call) -> u32 {
-    (!global_free(c.w(0))) as u32 // 0 = sucesso
+    (!global_free(c.w(0))) as u32 // 0 = success
 }
 
 fn global_lock(c: &mut Call) -> u32 {
     let h = c.w(0);
-    if global_info(h).is_some() { pack(0, h) } else { 0 } // DX:AX = seletor:0
+    if global_info(h).is_some() { pack(0, h) } else { 0 } // DX:AX = selector:0
 }
 
 fn global_size(c: &mut Call) -> u32 {
@@ -258,11 +258,11 @@ fn global_size(c: &mut Call) -> u32 {
 
 fn global_handle(c: &mut Call) -> u32 {
     let sel = c.w(0);
-    pack(sel, sel) // LOWORD = handle, HIWORD = seletor
+    pack(sel, sel) // LOWORD = handle, HIWORD = selector
 }
 
 fn global_compact(_c: &mut Call) -> u32 {
-    0x0080_0000 // 8 MiB livres (o valor é só informativo)
+    0x0080_0000 // 8 MiB free (the value is only informative)
 }
 
 fn get_free_space(_c: &mut Call) -> u32 {
@@ -291,7 +291,7 @@ fn get_module_file_name(c: &mut Call) -> u32 {
 }
 
 fn make_proc_instance(c: &mut Call) -> u32 {
-    c.l(0) // o procedimento é chamado com DS correto, então o próprio far ptr serve de "instância"
+    c.l(0) // the procedure is called with the correct DS, so the far ptr itself serves as the "instance"
 }
 
 fn free_proc_instance(_c: &mut Call) -> u32 {
@@ -308,7 +308,7 @@ fn fatal_exit(c: &mut Call) -> u32 {
 }
 
 fn get_profile_int(c: &mut Call) -> u32 {
-    c.w(2) as u32 // valor padrão: ainda não lemos WIN.INI
+    c.w(2) as u32 // default value: WIN.INI is not read yet
 }
 
 fn lstrlen(c: &mut Call) -> u32 {
@@ -324,7 +324,7 @@ fn lstrcpy(c: &mut Call) -> u32 {
             std::ptr::copy(src as usize as *const u8, dst as usize as *mut u8, n + 1);
         }
     }
-    c.l(0) // devolve o ponteiro de destino (far)
+    c.l(0) // returns the destination pointer (far)
 }
 
 fn hmemcpy(c: &mut Call) -> u32 {
@@ -373,9 +373,9 @@ pub static IMPLS: &[Impl] = &[
     Impl { module: "KERNEL", name: "HMEMCPY", sig: "ppl", f: hmemcpy },
 ];
 
-/// Cria o PSP e o ambiente DOS do processo e registra os dados do processo.
+/// Creates the process's PSP and DOS environment and registers the process data.
 pub fn setup(dgroup_sel: u16, dgroup_base: u32, exe_name: &str, cmdline: &str, stack: u16, heap: u16) -> Result<(), String> {
-    let psp = global_alloc(256).ok_or("sem memória para o PSP")?;
+    let psp = global_alloc(256).ok_or("out of memory for the PSP")?;
     let (pbase, _) = global_info(psp).unwrap();
     let cmd = cmdline.as_bytes();
     unsafe {
@@ -387,11 +387,11 @@ pub fn setup(dgroup_sel: u16, dgroup_base: u32, exe_name: &str, cmdline: &str, s
         std::ptr::copy_nonoverlapping(cmd.as_ptr(), p.add(0x81), n);
         *p.add(0x81 + n) = 0x0D;
     }
-    let env = global_alloc(256).ok_or("sem memória para o ambiente")?;
+    let env = global_alloc(256).ok_or("out of memory for the environment")?;
     let (ebase, _) = global_info(env).unwrap();
     unsafe {
         let e = ebase as usize as *mut u8;
-        // bloco de ambiente vazio + contagem + nome do programa
+        // empty environment block + count + program name
         *e.add(2) = 1;
         let full = format!("C:\\{exe_name}");
         std::ptr::copy_nonoverlapping(full.as_ptr(), e.add(4), full.len());
@@ -401,7 +401,7 @@ pub fn setup(dgroup_sel: u16, dgroup_base: u32, exe_name: &str, cmdline: &str, s
     Ok(())
 }
 
-/// Depuração: percorre as tabelas internas (um BTreeMap corrompido quebra aqui, logo após a API culpada).
+/// Debugging: walks the internal tables (a corrupted BTreeMap breaks here, right after the guilty API).
 pub fn validate() -> usize {
     let n = {
         let b = BLOCKS.lock().unwrap();

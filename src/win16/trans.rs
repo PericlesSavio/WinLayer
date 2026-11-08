@@ -1,9 +1,9 @@
-//! Transições entre o código de 32 bits (o winlayer) e o de 16 bits (programas Win16).
+//! Transitions between 32-bit code (winlayer) and 16-bit code (Win16 programs).
 //!
-//! 32 -> 16: `call16` empilha os argumentos na pilha de 16 bits, troca SS:ESP atomicamente (`lss`)
-//!           e salta para o procedimento.
-//! 16 -> 32: cada API é um stub (`push id; jmp far`) num segmento de 16 bits que cai em
-//!           `w16_api_entry`: salva registradores, volta à pilha do host e chama `w16_dispatch`.
+//! 32 -> 16: `call16` pushes the arguments onto the 16-bit stack, switches SS:ESP atomically (`lss`)
+//!           and jumps to the procedure.
+//! 16 -> 32: each API is a stub (`push id; jmp far`) in a 16-bit segment that lands in
+//!           `w16_api_entry`: saves registers, returns to the host stack and calls `w16_dispatch`.
 
 use super::ldt::{self, Kind};
 use std::ffi::c_void;
@@ -16,17 +16,17 @@ extern "C" {
     fn w16_call(off: u32, cs: u32, ds: u32, sp: u32, ss: u32);
 }
 
-// Globais lidas e escritas pelo assembly (por isso `static mut` e tipos simples).
+// Globals read and written by the assembly (hence `static mut` and simple types).
 #[no_mangle] static mut W16_DS32: u32 = 0;
 #[no_mangle] static mut W16_CS32: u32 = 0;
-#[no_mangle] static mut W16_HOST_STACK: [u32; 2] = [0; 2]; // esp, ss do host (para `lss`)
-#[no_mangle] static mut W16_SAVED16: [u32; 2] = [0; 2];    // sp, ss da pilha de 16 bits no momento da API
+#[no_mangle] static mut W16_HOST_STACK: [u32; 2] = [0; 2]; // host esp, ss (for `lss`)
+#[no_mangle] static mut W16_SAVED16: [u32; 2] = [0; 2];    // sp, ss of the 16-bit stack at the moment of the API
 #[no_mangle] static mut W16_NEWSTACK: [u32; 2] = [0; 2];
-#[no_mangle] static mut W16_FPTR: [u32; 2] = [0; 2];       // ponteiro far (off32, sel16) do destino
-#[no_mangle] static mut W16_ARGN: u32 = 0;                 // bytes de argumentos a descartar no retorno
-#[no_mangle] static mut W16_RET: [u32; 2] = [0; 2];        // AX, DX devolvidos por uma chamada 32->16
-/// Página própria (protegida contra escrita depois de `init`): se o código de 16 bits escrever aqui por
-/// engano, o SIGSEGV mostra o CS:IP do culpado em vez de um crash misterioso mais tarde.
+#[no_mangle] static mut W16_FPTR: [u32; 2] = [0; 2];       // far pointer (off32, sel16) of the target
+#[no_mangle] static mut W16_ARGN: u32 = 0;                 // argument bytes to discard on return
+#[no_mangle] static mut W16_RET: [u32; 2] = [0; 2];        // AX, DX returned by a 32->16 call
+/// Dedicated page (write-protected after `init`): if 16-bit code writes here by
+/// mistake, the SIGSEGV shows the culprit's CS:IP instead of a mysterious crash later.
 #[repr(C, align(4096))]
 struct DispatchPage {
     dispatch: usize,
@@ -35,9 +35,9 @@ struct DispatchPage {
 
 #[no_mangle]
 static mut W16_DISPATCH: DispatchPage = DispatchPage { dispatch: 0, _pad: [0; 4092] };
-/// Registradores entregues ao procedimento chamado: ax, bx, cx, dx, si, di, es (4 bytes cada).
+/// Registers handed to the called procedure: ax, bx, cx, dx, si, di, es (4 bytes each).
 #[no_mangle] static mut W16_REGS: [u32; 7] = [0; 7];
-/// Base linear do segmento de pilha de 16 bits (para achar o quadro de uma chamada de API).
+/// Linear base of the 16-bit stack segment (to find the frame of an API call).
 static mut STACK_BASE: u32 = 0;
 
 core::arch::global_asm!(
@@ -143,9 +143,9 @@ w16_ret_entry:
     regs = sym W16_REGS,
 );
 
-/// Tamanho do segmento de thunks (um segmento de 64 KiB).
+/// Size of the thunk segment (one 64 KiB segment).
 const THUNK_SIZE: usize = 0x1_0000;
-/// Cada stub de API ocupa 16 bytes; o último trecho guarda o stub de retorno 16 -> 32.
+/// Each API stub takes 16 bytes; the last stretch holds the 16 -> 32 return stub.
 const STUB: usize = 16;
 const RET_STUB: usize = THUNK_SIZE - 32;
 
@@ -157,17 +157,17 @@ pub struct Thunks {
 
 unsafe impl Send for Thunks {}
 
-/// Estado global da pilha de 16 bits (um único "processo" Win16).
+/// Global state of the 16-bit stack (a single Win16 "process").
 pub struct Stack16 {
     pub ss: u16,
     pub base: u32,
     pub top: u32,
-    /// Menor SP em uso (cresce para baixo); chamadas aninhadas continuam abaixo dele.
+    /// Lowest SP in use (grows downward); nested calls stay below it.
     pub cur_sp: u32,
 }
 
-/// Mapeia `size` bytes (RWX, zerados) seguidos de uma página de guarda inacessível: uma escrita do
-/// host além do fim de um segmento vira SIGSEGV no ponto exato, em vez de corromper o vizinho.
+/// Maps `size` bytes (RWX, zeroed) followed by an inaccessible guard page: a host write
+/// past the end of a segment becomes a SIGSEGV at the exact spot, instead of corrupting the neighbor.
 pub fn map_rwx(size: usize) -> *mut u8 {
     let size = size.div_ceil(4096) * 4096;
     unsafe {
@@ -180,7 +180,7 @@ pub fn map_rwx(size: usize) -> *mut u8 {
     }
 }
 
-/// Inicializa as globais do assembly (seletores planos do host e o despachante).
+/// Initializes the assembly globals (the host's flat selectors and the dispatcher).
 pub fn init(dispatch: extern "C" fn(u32)) {
     unsafe {
         let (ds, cs): (u32, u32);
@@ -193,15 +193,15 @@ pub fn init(dispatch: extern "C" fn(u32)) {
 }
 
 impl Thunks {
-    /// Cria o segmento de thunks (código de 16 bits) com o stub de retorno.
+    /// Creates the thunk segment (16-bit code) with the return stub.
     pub fn new() -> Result<Thunks, String> {
         let base = map_rwx(THUNK_SIZE);
         if base as isize == -1 {
-            return Err("mmap do segmento de thunks falhou".into());
+            return Err("thunk segment mmap failed".into());
         }
         let sel = ldt::alloc(base as usize as u32, (THUNK_SIZE - 1) as u32, Kind::Code16)?;
         let mut t = Thunks { sel, base, next: 0 };
-        // stub de retorno: jmp far cs32:w16_ret_entry (66 EA off32 sel16)
+        // return stub: jmp far cs32:w16_ret_entry (66 EA off32 sel16)
         t.write_far_jmp(RET_STUB, w16_ret_entry as usize as u32);
         Ok(t)
     }
@@ -214,25 +214,25 @@ impl Thunks {
         unsafe { std::ptr::copy_nonoverlapping(code.as_ptr(), self.base.add(at), code.len()) };
     }
 
-    /// Reserva um stub para a API `id` e devolve seu offset no segmento de thunks.
+    /// Reserves a stub for API `id` and returns its offset in the thunk segment.
     pub fn add_api(&mut self, id: u16) -> u16 {
         let at = self.next;
-        assert!(at + STUB <= RET_STUB, "segmento de thunks cheio");
+        assert!(at + STUB <= RET_STUB, "thunk segment full");
         self.next += STUB;
-        // push imm16 id (16 bits): 68 lo hi
+        // push imm16 id (16-bit): 68 lo hi
         let push = [0x68, id as u8, (id >> 8) as u8];
         unsafe { std::ptr::copy_nonoverlapping(push.as_ptr(), self.base.add(at), 3) };
         self.write_far_jmp(at + 3, w16_api_entry as usize as u32);
         at as u16
     }
 
-    /// Ponteiro far (seletor, offset) do stub de retorno.
+    /// Far pointer (selector, offset) of the return stub.
     pub fn ret_addr(&self) -> (u16, u16) {
         (self.sel, RET_STUB as u16)
     }
 }
 
-/// Registradores iniciais de uma chamada 32 -> 16 (o que o procedimento vê ao começar).
+/// Initial registers of a 32 -> 16 call (what the procedure sees on start).
 #[derive(Clone, Copy, Default)]
 pub struct Regs {
     pub ax: u16,
@@ -244,10 +244,10 @@ pub struct Regs {
     pub es: u16,
 }
 
-/// Chama um procedimento de 16 bits (convenção PASCAL: argumentos empilhados da esquerda para a
-/// direita, o chamado limpa a pilha). `args` são palavras de 16 bits já na ordem da chamada;
-/// `(cs, ip)` é o destino, `ds` o seletor de dados do programa. AX e ES começam iguais a `ds`
-/// (o prólogo de procedimentos exportados espera DS em AX). Devolve (AX, DX).
+/// Calls a 16-bit procedure (PASCAL convention: arguments pushed left to
+/// right, the callee cleans the stack). `args` are 16-bit words already in call order;
+/// `(cs, ip)` is the target, `ds` the program's data selector. AX and ES start equal to `ds`
+/// (the prologue of exported procedures expects DS in AX). Returns (AX, DX).
 pub fn call16(thunks: &Thunks, stack: &mut Stack16, cs: u16, ip: u16, ds: u16, args: &[u16]) -> (u16, u16) {
     call16_regs(thunks, stack, cs, ip, ds, args, Regs { ax: ds, es: ds, ..Default::default() })
 }
@@ -255,13 +255,13 @@ pub fn call16(thunks: &Thunks, stack: &mut Stack16, cs: u16, ip: u16, ds: u16, a
 pub fn call16_regs(thunks: &Thunks, stack: &mut Stack16, cs: u16, ip: u16, ds: u16, args: &[u16], regs: Regs) -> (u16, u16) {
     unsafe {
         W16_REGS = [regs.ax as u32, regs.bx as u32, regs.cx as u32, regs.dx as u32, regs.si as u32, regs.di as u32, regs.es as u32];
-        // Salva o estado global que chamadas aninhadas sobrescrevem.
+        // Saves the global state that nested calls overwrite.
         let saved_host = W16_HOST_STACK;
         let saved_frame = W16_SAVED16;
         let saved_argn = W16_ARGN;
         let saved_cur = stack.cur_sp;
 
-        // Monta a pilha: [args...][ret ip][ret cs], com o primeiro argumento no endereço mais alto.
+        // Builds the stack: [args...][ret ip][ret cs], with the first argument at the highest address.
         let mut sp = stack.cur_sp as u16;
         let mut push = |v: u16, sp: &mut u16| {
             *sp = sp.wrapping_sub(2);
@@ -288,10 +288,10 @@ pub fn call16_regs(thunks: &Thunks, stack: &mut Stack16, cs: u16, ip: u16, ds: u
     }
 }
 
-// ---- acesso ao quadro de uma chamada de API (usado pelo despachante) ----------------------------
+// ---- access to the frame of an API call (used by the dispatcher) ------------------------------
 
-/// Layout do quadro salvo por `w16_api_entry`, a partir de SP:
-/// es ds (4 bytes cada) | edi esi ebp esp ebx edx ecx eax | id u16 | ip u16 | cs u16 | argumentos...
+/// Layout of the frame saved by `w16_api_entry`, starting at SP:
+/// es ds (4 bytes each) | edi esi ebp esp ebx edx ecx eax | id u16 | ip u16 | cs u16 | arguments...
 pub const FRAME_ES: usize = 0;
 pub const FRAME_DS: usize = 4;
 pub const FRAME_EDI: usize = 8;
@@ -303,12 +303,12 @@ pub const FRAME_EAX: usize = 36;
 pub const FRAME_ID: usize = 40;
 pub const FRAME_ARGS: usize = 46;
 
-/// Registra a base linear da pilha de 16 bits.
+/// Records the linear base of the 16-bit stack.
 pub fn set_stack_base(base: u32) {
     unsafe { STACK_BASE = base }
 }
 
-/// Ponteiro para o quadro salvo de uma chamada de API (SP no momento do `w16_api_entry`).
+/// Pointer to the saved frame of an API call (SP at the moment of `w16_api_entry`).
 pub fn frame_ptr(sp16: u32) -> *mut u8 {
     unsafe { (STACK_BASE + sp16) as usize as *mut u8 }
 }
@@ -321,7 +321,7 @@ pub fn saved_sp() -> u32 {
     unsafe { W16_SAVED16[0] }
 }
 
-/// Depuração: estado das globais usadas pelo assembly.
+/// Debugging: state of the globals used by the assembly.
 pub fn debug_state() -> String {
     unsafe {
         format!("HOST_STACK={:x?} SAVED16={:x?} NEWSTACK={:x?} FPTR={:x?} ARGN={:#x} DS32={:#x} CS32={:#x} DISPATCH={:#x}",

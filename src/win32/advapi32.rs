@@ -1,5 +1,5 @@
-//! advapi32.dll — registro do Windows, mantido em memória (não persiste entre execuções).
-//! Chaves predefinidas: HKCR 0x80000000, HKCU 0x80000001, HKLM 0x80000002, HKU 0x80000003.
+//! advapi32.dll — Windows registry, kept in memory (does not persist between runs).
+//! Predefined keys: HKCR 0x80000000, HKCU 0x80000001, HKLM 0x80000002, HKU 0x80000003.
 
 use std::collections::BTreeMap;
 use std::sync::Mutex;
@@ -26,7 +26,7 @@ struct Value {
 
 #[derive(Default)]
 struct Key {
-    /// Valores por nome em minúsculas ("" = valor padrão).
+    /// Values by lowercase name ("" = default value).
     values: BTreeMap<String, Value>,
 }
 
@@ -48,7 +48,7 @@ fn root_name(h: u32) -> Option<&'static str> {
     })
 }
 
-/// Caminho normalizado (minúsculas, `\`) de `key` + `sub`.
+/// Normalized path (lowercase, `\`) of `key` + `sub`.
 fn full_path(r: &Registry, key: u32, sub: &str) -> Option<String> {
     let base = match root_name(key) {
         Some(n) => n.to_string(),
@@ -85,7 +85,7 @@ fn open(key: u32, sub: &str, create: bool) -> Option<u32> {
     let path = full_path(&r, key, sub)?;
     if !r.keys.contains_key(&path) {
         if root_name(key).is_some() && sub.is_empty() {
-            ensure(&mut r, &path); // as raízes sempre existem
+            ensure(&mut r, &path); // the roots always exist
         } else if create {
             ensure(&mut r, &path);
         } else {
@@ -95,7 +95,7 @@ fn open(key: u32, sub: &str, create: bool) -> Option<u32> {
     Some(new_handle(&mut r, path))
 }
 
-// ---- abrir / criar / fechar ---------------------------------------------------------------
+// ---- open / create / close ----------------------------------------------------------------
 
 #[allow(non_snake_case)]
 unsafe extern "stdcall" fn RegOpenKeyA(key: u32, sub: u32, out: *mut u32) -> u32 {
@@ -137,7 +137,7 @@ extern "stdcall" fn RegCloseKey(h: u32) -> u32 {
     ERROR_SUCCESS
 }
 
-// ---- valores ------------------------------------------------------------------------------
+// ---- values -------------------------------------------------------------------------------
 
 fn set_value(key: u32, name: &str, ty: u32, data: Vec<u8>) -> u32 {
     let mut r = REG.lock().unwrap();
@@ -174,7 +174,7 @@ unsafe extern "stdcall" fn RegSetValueExA(key: u32, name: u32, _r: u32, ty: u32,
     set_value(key, &s(name), ty, bytes)
 }
 
-/// Copia `data` para `buf` respeitando o tamanho em `*cb` (entrada/saída).
+/// Copies `data` to `buf` honoring the size in `*cb` (input/output).
 unsafe fn give(data: &[u8], buf: *mut u8, cb: *mut u32) -> u32 {
     if cb.is_null() {
         return ERROR_SUCCESS;
@@ -234,7 +234,7 @@ unsafe extern "stdcall" fn RegDeleteKeyA(key: u32, sub: u32) -> u32 {
     ERROR_SUCCESS
 }
 
-// ---- enumeração ---------------------------------------------------------------------------
+// ---- enumeration --------------------------------------------------------------------------
 
 #[allow(non_snake_case)]
 unsafe extern "stdcall" fn RegEnumKeyA(key: u32, idx: u32, buf: *mut u8, cb: u32) -> u32 {

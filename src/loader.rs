@@ -1,4 +1,4 @@
-//! Mapeia imagens PE32 (exe e DLLs) na memória do processo.
+//! Maps PE32 images (exe and DLLs) into the process memory.
 
 use crate::pe::{ImportName, Pe32, IMAGE_FILE_DLL};
 use crate::win32::{self, modules};
@@ -17,7 +17,7 @@ extern "C" {
     fn mmap(addr: *mut c_void, len: usize, prot: i32, flags: i32, fd: i32, off: i64) -> *mut c_void;
 }
 
-/// Com `--lazy`, imports não implementados viram armadilhas em vez de impedir a execução.
+/// With `--lazy`, unimplemented imports become traps instead of preventing execution.
 static LAZY: AtomicBool = AtomicBool::new(false);
 
 pub fn set_lazy(v: bool) {
@@ -36,11 +36,11 @@ pub enum LoadError {
 impl fmt::Display for LoadError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            LoadError::IsDll => write!(f, "DLL não pode ser executada diretamente"),
-            LoadError::NotDll => write!(f, "não é uma DLL"),
-            LoadError::Map(s) => write!(f, "falha ao mapear a imagem: {s}"),
-            LoadError::NeedsRelocation => write!(f, "imagem sem relocações não coube no endereço base"),
-            LoadError::Missing(v) => write!(f, "imports não implementados (use --lazy para ignorar):\n  {}", v.join("\n  ")),
+            LoadError::IsDll => write!(f, "a DLL cannot be run directly"),
+            LoadError::NotDll => write!(f, "not a DLL"),
+            LoadError::Map(s) => write!(f, "failed to map the image: {s}"),
+            LoadError::NeedsRelocation => write!(f, "image without relocations did not fit at its base address"),
+            LoadError::Missing(v) => write!(f, "unimplemented imports (use --lazy to ignore):\n  {}", v.join("\n  ")),
         }
     }
 }
@@ -51,19 +51,19 @@ pub struct Loaded {
 
 impl Loaded {
     /// # Safety
-    /// Executa código arbitrário do `.exe`.
+    /// Runs arbitrary code from the `.exe`.
     pub unsafe fn run(&self) -> u32 {
-        // Entry point de um .exe Win32: stdcall, sem argumentos, retorna o exit code.
+        // Entry point of a Win32 .exe: stdcall, no arguments, returns the exit code.
         let f: extern "stdcall" fn() -> u32 = std::mem::transmute(self.entry);
         let code = f();
         win32::kernel32::exit_process(code)
     }
 }
 
-/// Mapeia a imagem no endereço preferido ou, se ocupado e houver relocações, em outro lugar.
-/// Copia cabeçalhos e seções e aplica as relocações. Devolve o endereço real.
+/// Maps the image at the preferred address or, if taken and relocations exist, somewhere else.
+/// Copies headers and sections and applies the relocations. Returns the actual address.
 pub fn map(pe: &Pe32, file: &[u8]) -> Result<u32, LoadError> {
-    // Mapeia em RWX por simplicidade; endurecer por seção depois.
+    // Maps as RWX for simplicity; harden per section later.
     let prot = PROT_READ | PROT_WRITE | PROT_EXEC;
     let flags = MAP_PRIVATE | MAP_ANONYMOUS;
     let size = pe.size_of_image as usize;
@@ -75,7 +75,7 @@ pub fn map(pe: &Pe32, file: &[u8]) -> Result<u32, LoadError> {
         base = unsafe { mmap(std::ptr::null_mut(), size, prot, flags, -1, 0) };
     }
     if base as isize == -1 {
-        return Err(LoadError::Map("mmap falhou"));
+        return Err(LoadError::Map("mmap failed"));
     }
     let base = base as *mut u8;
 
@@ -118,9 +118,9 @@ fn apply_relocations(pe: &Pe32, base: *mut u8, delta: u32) {
 
 // ---- imports ------------------------------------------------------------------------------
 
-/// Nomes das funções que faltam, na ordem em que foram criadas as armadilhas.
+/// Names of the missing functions, in the order the traps were created.
 static TRAP_NAMES: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
-static TRAP_PAGE: std::sync::Mutex<(usize, usize)> = std::sync::Mutex::new((0, 0)); // (endereço, usados)
+static TRAP_PAGE: std::sync::Mutex<(usize, usize)> = std::sync::Mutex::new((0, 0)); // (address, used)
 
 static API_NAMES: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
 
@@ -134,7 +134,7 @@ extern "C" {
     fn process_vm_readv(pid: i32, local: *const IoVec, lcnt: u64, remote: *const IoVec, rcnt: u64, flags: u64) -> isize;
 }
 
-/// Lê até `n` bytes de um endereço qualquer sem arriscar SIGSEGV (via process_vm_readv no próprio processo).
+/// Reads up to `n` bytes from any address without risking SIGSEGV (via process_vm_readv on the process itself).
 pub(crate) fn peek(addr: u32, n: usize) -> Vec<u8> {
     if addr < 0x10000 {
         return Vec::new();
@@ -166,7 +166,7 @@ extern "C" fn log_api(idx: u32, args: *const u32) {
     eprintln!("{line}");
 }
 
-/// Stub de rastreio: preserva registradores e flags, loga o nome e salta para a função real.
+/// Trace stub: preserves registers and flags, logs the name and jumps to the real function.
 fn make_trace_thunk(label: String, target: u32) -> u32 {
     let mut names = API_NAMES.lock().unwrap();
     let idx = names.len() as u32;
@@ -196,11 +196,11 @@ static TRACE_PAGE: std::sync::Mutex<(usize, usize)> = std::sync::Mutex::new((0, 
 
 extern "C" fn missing_import(idx: u32) -> ! {
     let name = TRAP_NAMES.lock().unwrap().get(idx as usize).cloned().unwrap_or_default();
-    eprintln!("\n[winlayer] import NÃO IMPLEMENTADO chamado: {name}");
+    eprintln!("\n[winlayer] UNIMPLEMENTED import called: {name}");
     win32::kernel32::exit_process(3)
 }
 
-/// Gera um stub `push idx; mov eax, handler; call eax` que reporta a função chamada.
+/// Generates a stub `push idx; mov eax, handler; call eax` that reports the called function.
 fn make_trap(name: String) -> u32 {
     let mut names = TRAP_NAMES.lock().unwrap();
     let idx = names.len() as u32;
@@ -222,8 +222,8 @@ fn make_trap(name: String) -> u32 {
     at as u32
 }
 
-/// Escreve na IAT o endereço de cada import. Devolve os que não foram resolvidos
-/// (em modo lazy, já com armadilha instalada).
+/// Writes the address of each import into the IAT. Returns the unresolved ones
+/// (in lazy mode, with a trap already installed).
 pub fn fill_imports(pe: &Pe32, base: u32) -> Vec<String> {
     let lazy = LAZY.load(Ordering::Relaxed);
     let trace = std::env::var_os("WINLAYER_API_TRACE").is_some();
@@ -235,7 +235,7 @@ pub fn fill_imports(pe: &Pe32, base: u32) -> Vec<String> {
                 ImportName::Ordinal(o) => format!("{}!#{}", imp.dll, o),
             };
             let addr = modules::resolve_import(&imp.dll, name).or_else(|| {
-                if std::env::var_os("WINLAYER_TRACE").is_some() { eprintln!("[loader] falta {label}") }
+                if std::env::var_os("WINLAYER_TRACE").is_some() { eprintln!("[loader] missing {label}") }
                 missing.push(label.clone());
                 lazy.then(|| make_trap(label.clone()))
             });
@@ -251,7 +251,7 @@ pub fn fill_imports(pe: &Pe32, base: u32) -> Vec<String> {
     missing
 }
 
-// ---- executável principal -----------------------------------------------------------------
+// ---- main executable ----------------------------------------------------------------------
 
 pub fn load(pe: &Pe32, file: &[u8]) -> Result<Loaded, LoadError> {
     if pe.characteristics & IMAGE_FILE_DLL != 0 {
@@ -259,15 +259,15 @@ pub fn load(pe: &Pe32, file: &[u8]) -> Result<Loaded, LoadError> {
     }
     let base = map(pe, file)?;
     win32::kernel32::set_image_base(base);
-    // O TEB precisa existir antes: DLLs carregadas pelos imports executam DllMain (usa fs:).
+    // The TEB must exist first: DLLs loaded by the imports run DllMain (which uses fs:).
     if let Err(e) = win32::teb::install(base) {
         eprintln!("winlayer: TEB: {e}");
-        return Err(LoadError::Map("falha ao criar o TEB"));
+        return Err(LoadError::Map("failed to create the TEB"));
     }
     let missing = fill_imports(pe, base);
     if !missing.is_empty() {
         if LAZY.load(Ordering::Relaxed) {
-            eprintln!("[winlayer] {} imports não implementados (armadilhas instaladas)", missing.len());
+            eprintln!("[winlayer] {} unimplemented imports (traps installed)", missing.len());
         } else {
             return Err(LoadError::Missing(missing));
         }

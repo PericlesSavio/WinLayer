@@ -1,5 +1,5 @@
-//! msvcrt.dll — runtime C da Microsoft. Funções com a mesma convenção (cdecl) e o mesmo comportamento vão direto
-//! para o musl, inclusive `sprintf`/`sscanf`: quem chama limpa a pilha, então os argumentos variáveis passam intactos.
+//! msvcrt.dll — Microsoft C runtime. Functions with the same convention (cdecl) and the same behavior go straight
+//! to musl, including `sprintf`/`sscanf`: the caller cleans the stack, so variadic arguments pass through intact.
 
 use std::ffi::c_void;
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -26,14 +26,14 @@ extern "C" {
     fn winlayer_ciacos();
 }
 
-// Ajudantes do compilador da Microsoft que recebem o argumento na pilha do x87 (st0), não na pilha normal.
+// Microsoft compiler helpers that take their argument on the x87 stack (st0), not on the normal stack.
 core::arch::global_asm!(
     ".globl winlayer_ftol",
     "winlayer_ftol:",
     "sub esp, 12",
     "fnstcw word ptr [esp + 8]",
     "mov ax, word ptr [esp + 8]",
-    "or ax, 0xC00", // arredondar truncando
+    "or ax, 0xC00", // round by truncating
     "mov word ptr [esp + 10], ax",
     "fldcw word ptr [esp + 10]",
     "fistp qword ptr [esp]",
@@ -80,7 +80,7 @@ pub fn resolve(name: &str) -> Option<usize> {
         "sscanf" => sscanf as *const () as usize,
         "_ftol" => winlayer_ftol as *const () as usize,
         "_CIacos" => winlayer_ciacos as *const () as usize,
-        // importações de dados: o endereço é o da própria variável
+        // data imports: the address is that of the variable itself
         "_adjust_fdiv" => ADJUST_FDIV.as_ptr() as usize,
         "_acmdln" => {
             ACMDLN.store(super::kernel32::GetCommandLineA() as u32, Ordering::Relaxed);
@@ -102,7 +102,7 @@ pub fn resolve(name: &str) -> Option<usize> {
     }
 }
 
-/// Os caminhos do programa são os do Windows virtual: passam pelo mesmo mapeamento do CreateFile.
+/// The program's paths are those of the virtual Windows: they go through the same mapping as CreateFile.
 unsafe extern "C" fn fopen_(path: *const i8, mode: *const i8) -> *mut c_void {
     let win = std::ffi::CStr::from_ptr(path).to_string_lossy().into_owned();
     let Ok(host) = std::ffi::CString::new(super::files::host_path(&win).to_string_lossy().into_owned()) else {
@@ -111,7 +111,7 @@ unsafe extern "C" fn fopen_(path: *const i8, mode: *const i8) -> *mut c_void {
     fopen(host.as_ptr(), mode)
 }
 
-/// O mesmo gerador do runtime da Microsoft: o jogo pode contar com o limite de 32767.
+/// The same generator as the Microsoft runtime: the game may rely on the 32767 limit.
 extern "C" fn rand() -> i32 {
     let next = RAND.load(Ordering::Relaxed).wrapping_mul(214_013).wrapping_add(2_531_011);
     RAND.store(next, Ordering::Relaxed);
@@ -119,7 +119,7 @@ extern "C" fn rand() -> i32 {
 }
 
 extern "C" fn purecall() -> i32 {
-    eprintln!("[winlayer] msvcrt: chamada de função virtual pura");
+    eprintln!("[winlayer] msvcrt: pure virtual function call");
     super::kernel32::exit_process(3)
 }
 
@@ -135,7 +135,7 @@ extern "C" fn __p__fmode() -> *mut u32 {
     FMODE.as_ptr()
 }
 
-/// argc = 1: nenhum dos programas testados recebe argumentos por aqui.
+/// argc = 1: none of the tested programs receives arguments this way.
 unsafe extern "C" fn __getmainargs(argc: *mut i32, argv: *mut u32, env: *mut u32, _wild: i32, _info: u32) -> i32 {
     let args: &'static mut [u32; 2] = Box::leak(Box::new([c"program.exe".as_ptr() as u32, 0]));
     let envp: &'static mut [u32; 1] = Box::leak(Box::new([0]));
@@ -145,7 +145,7 @@ unsafe extern "C" fn __getmainargs(argc: *mut i32, argv: *mut u32, env: *mut u32
     0
 }
 
-/// Palavra de controle padrão do runtime; o pedido é ignorado.
+/// Runtime default control word; the request is ignored.
 extern "C" fn _controlfp(_new: u32, _mask: u32) -> u32 {
     0x0009_001F
 }
@@ -208,7 +208,7 @@ unsafe extern "C" fn _ltoa(value: i32, buf: *mut u8, radix: u32) -> *mut u8 {
     format_radix(value, buf, radix)
 }
 
-/// O wchar_t do Windows tem 16 bits (o do musl, 32): estas não podem ir para a libc.
+/// Windows wchar_t is 16-bit (musl's is 32): these cannot go to libc.
 unsafe extern "C" fn wcslen(s: *const u16) -> usize {
     let mut n = 0;
     while *s.add(n) != 0 {
@@ -227,7 +227,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn itoa_com_sinal_e_hexadecimal() {
+    fn itoa_signed_and_hexadecimal() {
         let mut b = [0u8; 16];
         unsafe {
             format_radix(-42, b.as_mut_ptr(), 10);
@@ -238,7 +238,7 @@ mod tests {
     }
 
     #[test]
-    fn rand_tem_a_sequencia_da_microsoft() {
+    fn rand_matches_microsoft_sequence() {
         RAND.store(1, Ordering::Relaxed);
         assert_eq!((rand(), rand(), rand()), (41, 18467, 6334));
     }

@@ -1,7 +1,7 @@
-//! Stubs gerados em lote (16/10/2026). Podem ser editados à mão e trocados por implementações reais
-//! (ao implementar uma, remova-a daqui e da lista de `resolve_*`).
-//! Funções ainda sem implementação real: devolvem um valor constante e limpam os `n` argumentos
-//! (stdcall) para não desbalancear a pilha.
+//! Stubs generated in bulk (2026-10-16). They can be edited by hand and replaced by real implementations
+//! (when implementing one, remove it from here and from the `resolve_*` list).
+//! Functions without a real implementation yet: they return a constant value and clear the `n` arguments
+//! (stdcall) so as not to unbalance the stack.
 
 #[allow(non_snake_case)]
 pub extern "stdcall" fn CreateFileMappingA(_a: u32, _b: u32, _c: u32, _d: u32, _e: u32, _f: u32) -> u32 {
@@ -35,7 +35,7 @@ pub extern "stdcall" fn FlushInstructionCache(_a: u32, _b: u32, _c: u32) -> u32 
 
 #[allow(non_snake_case)]
 pub extern "stdcall" fn VirtualQuery(_a: u32, _b: u32, _c: u32) -> u32 {
-    0 // implementação real em kernel32y.rs
+    0 // real implementation in kernel32y.rs
 }
 
 #[allow(non_snake_case)]
@@ -145,7 +145,7 @@ pub extern "stdcall" fn GetProfileIntA(_app: u32, _key: u32, default: u32) -> u3
 
 #[allow(non_snake_case)]
 pub extern "stdcall" fn LoadModule(_name: u32, _params: u32) -> u32 {
-    2 // ERROR_FILE_NOT_FOUND (valores < 32 são erro)
+    2 // ERROR_FILE_NOT_FOUND (values < 32 are errors)
 }
 
 #[allow(non_snake_case)]
@@ -190,7 +190,7 @@ pub unsafe extern "stdcall" fn FatalAppExitA(_action: u32, msg: *const i8) {
     super::kernel32::exit_process(1)
 }
 
-/// FILETIME (100 ns desde 1601) -> data/hora do DOS.
+/// FILETIME (100 ns since 1601) -> DOS date/time.
 #[allow(non_snake_case)]
 pub unsafe extern "stdcall" fn FileTimeToDosDateTime(ft: *const u64, date: *mut u16, time: *mut u16) -> i32 {
     if ft.is_null() {
@@ -198,7 +198,7 @@ pub unsafe extern "stdcall" fn FileTimeToDosDateTime(ft: *const u64, date: *mut 
     }
     let secs = (std::ptr::read_unaligned(ft) / 10_000_000).saturating_sub(11_644_473_600) as i64;
     let (days, rem) = (secs.div_euclid(86_400), secs.rem_euclid(86_400));
-    // dias desde 1970-01-01 -> ano/mês/dia (algoritmo civil de H. Hinnant)
+    // days since 1970-01-01 -> year/month/day (H. Hinnant's civil algorithm)
     let z = days + 719_468;
     let era = z.div_euclid(146_097);
     let doe = z - era * 146_097;
@@ -223,7 +223,7 @@ pub unsafe extern "stdcall" fn GetSystemTimeAsFileTime(ft: *mut u64) {
     std::ptr::write_unaligned(ft, (now.as_secs() + 11_644_473_600) * 10_000_000 + now.subsec_nanos() as u64 / 100);
 }
 
-/// MEMORYSTATUS: valores de uma máquina de 1999 com folga (256 MB de RAM, 2 GB de espaço virtual).
+/// MEMORYSTATUS: values of a 1999 machine with headroom (256 MB of RAM, 2 GB of virtual space).
 #[allow(non_snake_case)]
 pub unsafe extern "stdcall" fn GlobalMemoryStatus(ms: *mut u32) {
     if ms.is_null() {
@@ -259,7 +259,7 @@ pub unsafe extern "stdcall" fn lstrcpynA(dst: *mut u8, src: *const u8, n: i32) -
     dst
 }
 
-/// OpenFile (API de 16 bits ainda presente no Win32): OF_EXIST, OF_DELETE e abertura via CreateFileA.
+/// OpenFile (16-bit API still present in Win32): OF_EXIST, OF_DELETE and opening via CreateFileA.
 #[allow(non_snake_case)]
 pub unsafe extern "stdcall" fn OpenFile(name: *const i8, of: *mut u8, style: u32) -> i32 {
     const OF_EXIST: u32 = 0x4000;
@@ -721,7 +721,7 @@ pub extern "stdcall" fn GetIconInfo(_a: u32, _b: u32) -> u32 {
     0
 }
 
-/// SystemParametersInfoA: só as consultas que os jogos fazem na inicialização.
+/// SystemParametersInfoA: only the queries games make at startup.
 #[allow(non_snake_case)]
 pub unsafe extern "stdcall" fn SystemParametersInfoA(action: u32, _ui: u32, pv: *mut u32, _ini: u32) -> u32 {
     if pv.is_null() {
@@ -729,7 +729,7 @@ pub unsafe extern "stdcall" fn SystemParametersInfoA(action: u32, _ui: u32, pv: 
     }
     match action {
         0x30 => {
-            // SPI_GETWORKAREA: a tela inteira
+            // SPI_GETWORKAREA: the whole screen
             *pv = 0;
             *pv.add(1) = 0;
             *pv.add(2) = super::user32::desktop_w() as u32;
@@ -1000,7 +1000,7 @@ pub extern "stdcall" fn EnumMetaFile(_a: u32, _b: u32, _c: u32, _d: u32) -> u32 
     0
 }
 
-/// Paleta do sistema: as 20 cores fixas do Windows nas pontas e preto no meio.
+/// System palette: the 20 fixed Windows colors at the ends and black in the middle.
 #[allow(non_snake_case)]
 pub unsafe extern "stdcall" fn GetSystemPaletteEntries(_hdc: u32, start: u32, n: u32, out: *mut u32) -> u32 {
     const LOW: [u32; 10] = [0x000000, 0x000080, 0x008000, 0x008080, 0x800000, 0x800080, 0x808000, 0xC0C0C0, 0xC0DCC0, 0xF0CAA6];
@@ -1010,7 +1010,7 @@ pub unsafe extern "stdcall" fn GetSystemPaletteEntries(_hdc: u32, start: u32, n:
     }
     for i in 0..n.min(256u32.saturating_sub(start)) {
         let idx = (start + i) as usize;
-        // PALETTEENTRY = R, G, B, flags; as constantes acima estão como COLORREF (0x00BBGGRR)
+        // PALETTEENTRY = R, G, B, flags; the constants above are COLORREF (0x00BBGGRR)
         *out.add(i as usize) = if idx < 10 { LOW[idx] } else if idx >= 246 { HIGH[idx - 246] } else { 0 };
     }
     n
@@ -1280,7 +1280,7 @@ pub extern "stdcall" fn IsAccelerator(_a: u32, _b: u32, _c: u32, _d: u32) -> u32
 }
 
 #[allow(non_snake_case)]
-/// Só as classes que o winlayer implementa (DirectPlay Lobby); o resto é "classe não registrada".
+/// Only the classes winlayer implements (DirectPlay Lobby); the rest is "class not registered".
 pub unsafe extern "stdcall" fn CoCreateInstance(clsid: u32, _outer: u32, _ctx: u32, _iid: u32, out: *mut u32) -> u32 {
     const REGDB_E_CLASSNOTREG: u32 = 0x8004_0154;
     let first = if clsid == 0 { 0 } else { std::ptr::read_unaligned(clsid as usize as *const u32) };
@@ -1301,7 +1301,7 @@ pub unsafe extern "stdcall" fn CoCreateInstance(clsid: u32, _outer: u32, _ctx: u
         *out = 0;
     }
     if std::env::var_os("WINLAYER_TRACE").is_some() {
-        eprintln!("[ole32] CoCreateInstance: classe {first:#010x} não registrada");
+        eprintln!("[ole32] CoCreateInstance: classe {first:#010x} not registered");
     }
     REGDB_E_CLASSNOTREG
 }
@@ -1476,7 +1476,7 @@ pub unsafe extern "stdcall" fn GetUserNameA(buf: *mut u8, size: *mut u32) -> i32
     1
 }
 
-/// Ícone na bandeja do sistema: não há bandeja, finge que deu certo.
+/// System tray icon: there is no tray, pretends it succeeded.
 #[allow(non_snake_case)]
 pub extern "stdcall" fn Shell_NotifyIconA(_msg: u32, _data: u32) -> i32 {
     1
@@ -1518,7 +1518,7 @@ pub unsafe extern "stdcall" fn CompareFileTime(a: *const u64, b: *const u64) -> 
     }
 }
 
-/// Copia `text` + NUL; com n == 0 só informa o tamanho necessário. Devolve o tamanho com o NUL.
+/// Copies `text` + NUL; with n == 0 only reports the required size. Returns the size including the NUL.
 unsafe fn fill_text(buf: *mut u8, n: i32, text: &str) -> i32 {
     let need = text.len() as i32 + 1;
     if n == 0 {
@@ -1532,7 +1532,7 @@ unsafe fn fill_text(buf: *mut u8, n: i32, text: &str) -> i32 {
     need
 }
 
-/// SYSTEMTIME informado, ou a hora atual: ano, mês, dia da semana, dia, hora, minuto, segundo, ms.
+/// Given SYSTEMTIME, or the current time: year, month, day of week, day, hour, minute, second, ms.
 unsafe fn system_time(st: *const u16) -> [u16; 8] {
     let mut now = [0u16; 8];
     if st.is_null() {
@@ -1543,21 +1543,21 @@ unsafe fn system_time(st: *const u16) -> [u16; 8] {
     now
 }
 
-/// O formato pedido é ignorado: sempre MM/dd/yyyy.
+/// The requested format is ignored: always MM/dd/yyyy.
 #[allow(non_snake_case)]
 pub unsafe extern "stdcall" fn GetDateFormatA(_lcid: u32, _flags: u32, st: *const u16, _fmt: u32, buf: *mut u8, n: i32) -> i32 {
     let t = system_time(st);
     fill_text(buf, n, &format!("{:02}/{:02}/{:04}", t[1], t[3], t[0]))
 }
 
-/// O formato pedido é ignorado: sempre HH:mm:ss.
+/// The requested format is ignored: always HH:mm:ss.
 #[allow(non_snake_case)]
 pub unsafe extern "stdcall" fn GetTimeFormatA(_lcid: u32, _flags: u32, st: *const u16, _fmt: u32, buf: *mut u8, n: i32) -> i32 {
     let t = system_time(st);
     fill_text(buf, n, &format!("{:02}:{:02}:{:02}", t[4], t[5], t[6]))
 }
 
-/// Só existe o drive C:, que é a pasta do jogo.
+/// Only drive C: exists, which is the game folder.
 #[allow(non_snake_case)]
 pub unsafe extern "stdcall" fn GetLogicalDriveStringsA(n: u32, buf: *mut u8) -> u32 {
     let drives = b"C:\\\0\0";
@@ -1573,7 +1573,7 @@ pub unsafe extern "stdcall" fn InterlockedExchange(p: *mut i32, v: i32) -> i32 {
     std::sync::atomic::AtomicI32::from_ptr(p).swap(v, std::sync::atomic::Ordering::SeqCst)
 }
 
-/// Não há mutexes nomeados: nunca existe outra instância.
+/// There are no named mutexes: another instance never exists.
 #[allow(non_snake_case)]
 pub extern "stdcall" fn OpenMutexA(_access: u32, _inherit: i32, _name: u32) -> u32 {
     0
@@ -1605,7 +1605,7 @@ pub unsafe extern "stdcall" fn GetKeyboardLayoutList(n: i32, list: *mut u32) -> 
     1
 }
 
-// ---- imm32.dll: entrada de texto asiático; não há IME, então nenhum contexto existe ------------
+// ---- imm32.dll: Asian text input; there is no IME, so no context exists ------------------------
 
 #[allow(non_snake_case)]
 pub extern "stdcall" fn ImmCreateContext() -> u32 { 0 }
@@ -1663,7 +1663,7 @@ pub extern "stdcall" fn SetSystemPaletteUse(_hdc: u32, _usage: u32) -> u32 {
     1 // SYSPAL_STATIC
 }
 
-/// API de 16 bits: modo 0 = leitura, 1 = escrita, 2 = leitura e escrita.
+/// 16-bit API: mode 0 = read, 1 = write, 2 = read and write.
 #[allow(non_snake_case)]
 pub unsafe extern "stdcall" fn _lopen(name: *const i8, mode: u32) -> i32 {
     let access = match mode & 3 { 0 => 0x8000_0000, 1 => 0x4000_0000, _ => 0xC000_0000 };

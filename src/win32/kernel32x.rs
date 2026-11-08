@@ -1,4 +1,4 @@
-//! kernel32: variantes wide (W), console e miscelânea exigidas pelo runtime C (msvcrt).
+//! kernel32: wide (W) variants, console and miscellaneous functions required by the C runtime (msvcrt).
 
 use super::files;
 use std::ffi::CString;
@@ -22,7 +22,7 @@ fn set_error(e: u32) {
     super::kernel32::set_last_error(e);
 }
 
-/// UTF-16 terminado em NUL -> CString (Latin-1: unidades > 0xFF viram '?').
+/// NUL-terminated UTF-16 -> CString (Latin-1: units > 0xFF become '?').
 unsafe fn narrow(p: *const u16) -> CString {
     let mut v = Vec::new();
     let mut i = 0;
@@ -46,7 +46,7 @@ unsafe fn widen_into(src: &[u8], dst: *mut u16, max: u32) -> u32 {
     n as u32
 }
 
-// ---- processos e handles ------------------------------------------------------------------
+// ---- processes and handles ----------------------------------------------------------------
 
 #[allow(non_snake_case)]
 extern "stdcall" fn CreateProcessA(_a: u32, _b: u32, _c: u32, _d: u32, _e: i32, _f: u32, _g: u32, _h: u32, _i: u32, _j: u32) -> i32 {
@@ -83,7 +83,7 @@ unsafe extern "stdcall" fn GetExitCodeProcess(_h: u32, code: *mut u32) -> i32 {
     1
 }
 
-// ---- arquivos (W) -------------------------------------------------------------------------
+// ---- files (W) ----------------------------------------------------------------------------
 
 #[allow(non_snake_case)]
 unsafe extern "stdcall" fn CreateFileW(name: *const u16, access: u32, share: u32, sec: u32, disp: u32, flags: u32, tmpl: u32) -> u32 {
@@ -102,7 +102,7 @@ unsafe extern "stdcall" fn GetFileAttributesW(name: *const u16) -> u32 {
 
 #[allow(non_snake_case)]
 unsafe extern "stdcall" fn FindFirstFileW(pattern: *const u16, out: *mut u16) -> u32 {
-    // WIN32_FIND_DATAW: 44 bytes de cabeçalho iguais; cFileName[260] em UTF-16 a partir de 44.
+    // WIN32_FIND_DATAW: same 44-byte header; cFileName[260] in UTF-16 starting at 44.
     let mut tmp = [0u8; 320];
     let h = files::FindFirstFileA(narrow(pattern).as_ptr(), tmp.as_mut_ptr());
     if h != files::INVALID_HANDLE {
@@ -256,7 +256,7 @@ extern "stdcall" fn SetFileTime(_h: u32, _a: u32, _b: u32, _c: u32) -> i32 {
 unsafe extern "stdcall" fn SystemTimeToFileTime(st: *const u16, ft: *mut u64) -> i32 {
     let (y, m, d) = (*st as i64, *st.add(1) as i64, *st.add(3) as i64);
     let (h, mi, s, ms) = (*st.add(4) as i64, *st.add(5) as i64, *st.add(6) as i64, *st.add(7) as i64);
-    // data civil -> dias desde 1970 (Howard Hinnant)
+    // civil date -> days since 1970 (Howard Hinnant)
     let y2 = if m <= 2 { y - 1 } else { y };
     let era = y2.div_euclid(400);
     let yoe = y2.rem_euclid(400);
@@ -274,7 +274,7 @@ unsafe extern "stdcall" fn LocalFileTimeToFileTime(src: *const u64, dst: *mut u6
     1
 }
 
-// ---- console (não há console: tudo falha ou é ignorado) -----------------------------------
+// ---- console (there is no console: everything fails or is ignored) ------------------------
 
 #[allow(non_snake_case)]
 extern "stdcall" fn GetNumberOfConsoleInputEvents(_h: u32, _n: u32) -> i32 { 0 }
@@ -296,7 +296,7 @@ unsafe extern "stdcall" fn WriteConsoleA(h: u32, buf: *const u8, n: u32, written
     super::kernel32::write_file_raw(h as usize, buf, n, written)
 }
 
-// ---- miscelânea ---------------------------------------------------------------------------
+// ---- miscellaneous ------------------------------------------------------------------------
 
 #[allow(non_snake_case)]
 extern "stdcall" fn IsValidCodePage(_cp: u32) -> i32 { 1 }
@@ -313,7 +313,7 @@ extern "stdcall" fn SetUnhandledExceptionFilter(_f: u32) -> u32 { 0 }
 
 #[allow(non_snake_case)]
 extern "stdcall" fn Sleep(ms: u32) {
-    // No modo captura (sem tela) não faz sentido esperar de verdade.
+    // In capture mode (no screen) there is no point in really waiting.
     let ms = if std::env::var_os("WINLAYER_SHOT").is_some() { ms.min(5) } else { ms };
     std::thread::sleep(std::time::Duration::from_millis(ms as u64));
 }

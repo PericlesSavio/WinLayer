@@ -1,8 +1,8 @@
-//! Visualizador: servidor HTTP mínimo (só std) que mostra o "desktop" num <canvas> e recebe
-//! mouse/teclado do navegador. Sem bibliotecas gráficas: qualquer navegador serve de tela.
+//! Viewer: minimal HTTP server (std only) that shows the "desktop" in a <canvas> and receives
+//! mouse/keyboard input from the browser. No graphics libraries: any browser works as the screen.
 //!
-//! Rotas: `GET /` (página), `GET /frame?since=N` (long-poll; corpo = RGBA 640x480, cabeçalho
-//! X-Version), `POST /event` (linhas do protocolo de entrada; ver `win32/user32/input.rs`).
+//! Routes: `GET /` (page), `GET /frame?since=N` (long-poll; body = RGBA 640x480, header
+//! X-Version), `POST /event` (input protocol lines; see `win32/user32/input.rs`).
 
 use crate::audio;
 use crate::win32::user32;
@@ -14,7 +14,7 @@ const PAGE: &str = include_str!("viewer.html");
 
 pub fn start(bind: &str, port: u16) -> std::io::Result<()> {
     let listener = TcpListener::bind((bind, port))?;
-    eprintln!("[winlayer] visualizador em http://{bind}:{port}/");
+    eprintln!("[winlayer] viewer at http://{bind}:{port}/");
     std::thread::spawn(move || {
         for conn in listener.incoming().flatten() {
             std::thread::spawn(move || {
@@ -36,7 +36,7 @@ fn respond(s: &mut TcpStream, status: &str, ctype: &str, extra: &str, body: &[u8
 
 fn handle(mut s: TcpStream) -> std::io::Result<()> {
     s.set_read_timeout(Some(Duration::from_secs(5)))?;
-    // Lê até o fim dos cabeçalhos.
+    // Reads up to the end of the headers.
     let mut buf = Vec::new();
     let mut tmp = [0u8; 2048];
     let head_end = loop {
@@ -84,7 +84,7 @@ fn handle(mut s: TcpStream) -> std::io::Result<()> {
             let id: usize = query.split('&').find_map(|kv| kv.strip_prefix("id=")).and_then(|v| v.parse().ok()).unwrap_or(0);
             match audio::wav_bytes(id) {
                 Some(b) => respond(&mut s, "200 OK", "audio/wav", "", &b),
-                None => respond(&mut s, "404 Not Found", "text/plain", "", b"sem som"),
+                None => respond(&mut s, "404 Not Found", "text/plain", "", b"no sound"),
             }
         }
         ("GET", "/audio") => {
@@ -108,6 +108,6 @@ fn handle(mut s: TcpStream) -> std::io::Result<()> {
             user32::push_events(&String::from_utf8_lossy(&body));
             respond(&mut s, "204 No Content", "text/plain", "", b"")
         }
-        _ => respond(&mut s, "404 Not Found", "text/plain", "", b"nao encontrado"),
+        _ => respond(&mut s, "404 Not Found", "text/plain", "", b"not found"),
     }
 }

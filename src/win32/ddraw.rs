@@ -1,17 +1,17 @@
-//! ddraw.dll — DirectDraw (interfaces do DirectX 5 e 6: IDirectDraw/2/4, IDirectDrawSurface/2/3/4,
-//! IDirectDrawPalette, IDirectDrawClipper), todo em software.
+//! ddraw.dll — DirectDraw (DirectX 5 and 6 interfaces: IDirectDraw/2/4, IDirectDrawSurface/2/3/4,
+//! IDirectDrawPalette, IDirectDrawClipper), entirely in software.
 //!
-//! As estruturas do DirectX 6 (DDSURFACEDESC2, DDSCAPS2) têm os mesmos deslocamentos das do DirectX 5,
-//! só são maiores: as descrições respeitam o `dwSize` (108 ou 124) de quem chama.
+//! The DirectX 6 structures (DDSURFACEDESC2, DDSCAPS2) have the same offsets as the DirectX 5 ones,
+//! they are just larger: descriptions honor the caller's `dwSize` (108 or 124).
 //!
-//! Cada superfície é um bloco de memória no formato pedido (8 bits com paleta, 16/24/32 bits RGB).
-//! A superfície primária é "apresentada" convertendo os pixels para 0xFFRRGGBB e copiando para o
-//! buffer da janela do jogo (a de `SetCooperativeLevel`); o visualizador (X11/navegador/PNG) mostra
-//! esse buffer como mostra qualquer outra janela. Apresenta-se em `Flip`, `Unlock`/`ReleaseDC`/`Blt`
-//! na primária e quando a paleta da primária muda.
+//! Each surface is a memory block in the requested format (8-bit paletted, 16/24/32-bit RGB).
+//! The primary surface is "presented" by converting its pixels to 0xFFRRGGBB and copying them to the
+//! buffer of the game window (the one from `SetCooperativeLevel`); the viewer (X11/browser/PNG) shows
+//! that buffer the way it shows any other window. Presentation happens on `Flip`, on `Unlock`/`ReleaseDC`/`Blt`
+//! to the primary and when the primary's palette changes.
 //!
-//! Objetos COM: um ponteiro para a tabela de funções (vtable), alocado e vazado de propósito. O estado
-//! fica em `DD`, indexado pelo próprio ponteiro do objeto.
+//! COM objects: a pointer to the function table (vtable), allocated and leaked on purpose. The state
+//! lives in `DD`, indexed by the object pointer itself.
 
 use super::{call3, call4, gdi32, user32};
 use std::collections::BTreeMap;
@@ -74,14 +74,14 @@ const DDCKEY_SRCBLT: u32 = 0x8;
 // SetCooperativeLevel
 const DDSCL_FULLSCREEN: u32 = 0x1;
 
-/// Memória total "de vídeo" informada ao jogo.
+/// Total "video" memory reported to the game.
 const VIDMEM: u32 = 8 << 20;
 
 fn trace() -> bool {
     std::env::var_os("WINLAYER_DDRAW_TRACE").is_some()
 }
 
-// ---- estado -------------------------------------------------------------------------------
+// ---- state --------------------------------------------------------------------------------
 
 #[derive(Clone, Copy, PartialEq)]
 struct Format {
@@ -107,7 +107,7 @@ impl Format {
     }
 }
 
-/// Converte um valor de pixel pela máscara para 0..255.
+/// Converts a pixel value through the mask to 0..255.
 fn channel(v: u32, mask: u32) -> u32 {
     if mask == 0 {
         return 0;
@@ -117,7 +117,7 @@ fn channel(v: u32, mask: u32) -> u32 {
     ((v & mask) >> shift) * 255 / max
 }
 
-/// Converte 0..255 para o campo da máscara.
+/// Converts 0..255 to the mask field.
 fn unchannel(c: u32, mask: u32) -> u32 {
     if mask == 0 {
         return 0;
@@ -134,9 +134,9 @@ struct Surface {
     fmt: Format,
     mem: Vec<u8>,
     caps: u32,
-    /// Superfície de trás anexada (cadeia de flip): ponteiro do objeto, 0 = nenhuma.
+    /// Attached back surface (flip chain): object pointer, 0 = none.
     back: u32,
-    /// Z-buffer anexado (0 = nenhum).
+    /// Attached Z-buffer (0 = none).
     zbuffer: u32,
     primary: bool,
     palette: u32,
@@ -144,7 +144,7 @@ struct Surface {
     ck_src: Option<(u32, u32)>,
     ck_dst: Option<(u32, u32)>,
     refs: u32,
-    /// GetDC em andamento: (hdc, hbitmap, cópia dos pixels entregues ao GDI).
+    /// GetDC in progress: (hdc, hbitmap, copy of the pixels handed to GDI).
     dc: Option<(u32, u32, Vec<u32>)>,
 }
 
@@ -173,13 +173,13 @@ impl Surface {
 }
 
 struct Palette {
-    /// 0xFFRRGGBB por índice.
+    /// 0xFFRRGGBB by index.
     rgb: [u32; 256],
     refs: u32,
 }
 
 struct State {
-    /// Objetos IDirectDraw e IDirectDraw2 (mesmo estado).
+    /// IDirectDraw and IDirectDraw2 objects (same state).
     dd1: u32,
     dd2: u32,
     dd4: u32,
@@ -206,7 +206,7 @@ static DD: Mutex<State> = Mutex::new(State {
     primary: 0,
 });
 
-/// O jogo está usando DirectDraw (o modo captura não encerra no primeiro momento ocioso).
+/// The game is using DirectDraw (capture mode does not exit at the first idle moment).
 static ACTIVE: AtomicBool = AtomicBool::new(false);
 static FRAMES: AtomicU32 = AtomicU32::new(0);
 static LAST_VBLANK: AtomicU32 = AtomicU32::new(0);
@@ -215,7 +215,7 @@ pub fn active() -> bool {
     ACTIVE.load(Ordering::Relaxed)
 }
 
-/// Modo de vídeo atual: o pedido por `SetDisplayMode` ou o do desktop (16 bits).
+/// Current video mode: the one requested by `SetDisplayMode` or the desktop's (16-bit).
 fn mode(s: &State) -> (i32, i32, u32) {
     if s.mode.0 > 0 {
         s.mode
@@ -224,7 +224,7 @@ fn mode(s: &State) -> (i32, i32, u32) {
     }
 }
 
-// ---- objetos COM --------------------------------------------------------------------------
+// ---- COM objects --------------------------------------------------------------------------
 
 fn new_obj(vtbl: &'static [u32]) -> u32 {
     Box::leak(Box::new(vtbl.as_ptr() as u32)) as *mut u32 as u32
@@ -249,7 +249,7 @@ unsafe fn zero(p: u32, n: usize) {
     std::ptr::write_bytes(p as usize as *mut u8, 0, n);
 }
 
-/// Primeiro dword do GUID (basta para distinguir as interfaces do DirectDraw).
+/// First dword of the GUID (enough to tell the DirectDraw interfaces apart).
 unsafe fn iid(p: u32) -> u32 {
     if p == 0 { 0 } else { rd(p, 0) }
 }
@@ -262,7 +262,7 @@ unsafe fn rect(p: u32) -> Option<(i32, i32, i32, i32)> {
     }
 }
 
-// ---- API exportada ------------------------------------------------------------------------
+// ---- exported API -------------------------------------------------------------------------
 
 #[allow(non_snake_case)]
 unsafe extern "stdcall" fn DirectDrawCreate(_guid: u32, out: *mut u32, _outer: u32) -> u32 {
@@ -329,7 +329,7 @@ unsafe extern "stdcall" fn dd_get_device_identifier(_this: u32, out: u32, _flags
     for (o, text) in [(0u32, &b"winlayer.drv"[..]), (512, &b"winlayer DirectDraw (software)"[..])] {
         std::ptr::copy_nonoverlapping(text.as_ptr(), (out + o) as usize as *mut u8, text.len());
     }
-    wr(out, 1024, 1); // versão do driver (parte baixa)
+    wr(out, 1024, 1); // driver version (low part)
     DD_OK
 }
 
@@ -351,7 +351,7 @@ unsafe extern "stdcall" fn dd_qi(_this: u32, riid: u32, out: *mut u32) -> u32 {
         super::d3d::IID_D3D3 => super::d3d::direct3d3(),
         other => {
             if trace() {
-                eprintln!("[ddraw] QueryInterface: interface {other:#010x} não suportada");
+                eprintln!("[ddraw] QueryInterface: interface {other:#010x} not supported");
             }
             if !out.is_null() {
                 *out = 0;
@@ -373,14 +373,14 @@ extern "stdcall" fn dd_release(_this: u32) -> u32 {
 
 extern "stdcall" fn dd_ok1(this: u32) -> u32 {
     if trace() {
-        eprintln!("[ddraw] método dd_ok1 em {this:#x}");
+        eprintln!("[ddraw] method dd_ok1 on {this:#x}");
     }
     DD_OK
 }
 
 extern "stdcall" fn dd_ok2(this: u32, _a: u32) -> u32 {
     if trace() {
-        eprintln!("[ddraw] método dd_ok2 em {this:#x}");
+        eprintln!("[ddraw] method dd_ok2 on {this:#x}");
     }
     DD_OK
 }
@@ -455,7 +455,7 @@ unsafe extern "stdcall" fn dd_create_surface(_this: u32, desc: u32, out: *mut u3
         let mut p = Surface::new(mw, mh, fmt, caps | DDSCAPS_VISIBLE | DDSCAPS_VIDEOMEMORY | DDSCAPS_LOCALVIDMEM | if backs > 0 { DDSCAPS_FRONTBUFFER } else { 0 });
         p.primary = true;
         obj = new_obj(surface_vtbl());
-        // cadeia: primária -> back1 -> back2 ... (a última aponta de volta para a primária só via Flip)
+        // chain: primary -> back1 -> back2 ... (the last one points back to the primary only via Flip)
         let mut prev = obj;
         let mut chain = Vec::new();
         for i in 0..backs {
@@ -474,7 +474,7 @@ unsafe extern "stdcall" fn dd_create_surface(_this: u32, desc: u32, out: *mut u3
         }
         s.primary = obj;
         if trace() {
-            eprintln!("[ddraw] CreateSurface primária {mw}x{mh}x{mbpp} com {backs} buffer(s) de trás -> {obj:#x}");
+            eprintln!("[ddraw] CreateSurface primary {mw}x{mh}x{mbpp} with {backs} back buffer(s) -> {obj:#x}");
         }
     } else {
         if flags & (DDSD_WIDTH | DDSD_HEIGHT) != (DDSD_WIDTH | DDSD_HEIGHT) {
@@ -514,7 +514,7 @@ unsafe extern "stdcall" fn dd_duplicate_surface(_this: u32, src: u32, out: *mut 
 }
 
 unsafe fn fill_desc(desc: u32, w: i32, h: i32, pitch: usize, fmt: Format, caps: u32) {
-    // DDSURFACEDESC (108 bytes) ou DDSURFACEDESC2 (124): mantém o tamanho de quem chamou.
+    // DDSURFACEDESC (108 bytes) or DDSURFACEDESC2 (124): keeps the caller's size.
     let size = if rd(desc, 0) == 124 { 124 } else { 108 };
     zero(desc, size as usize);
     wr(desc, 0, size);
@@ -568,7 +568,7 @@ unsafe fn call2(f: u32, a: u32, b: u32) -> u32 {
 
 extern "stdcall" fn dd_enum_surfaces(this: u32, _flags: u32, _desc: u32, _ctx: u32, _cb: u32) -> u32 {
     if trace() {
-        eprintln!("[ddraw] método dd_enum_surfaces em {this:#x}");
+        eprintln!("[ddraw] method dd_enum_surfaces on {this:#x}");
     }
     DD_OK
 }
@@ -671,7 +671,7 @@ fn set_mode(w: u32, h: u32, bpp: u32) -> u32 {
         s.mode = (w as i32, h as i32, if bpp == 0 { 16 } else { bpp });
         (s.hwnd, s.coop & DDSCL_FULLSCREEN != 0)
     };
-    // A "tela" passa a ter o tamanho do modo; o visualizador escala para a janela real.
+    // The "screen" takes the size of the mode; the viewer scales it to the real window.
     user32::lock_screen(w as usize, h as usize);
     if full && hwnd != 0 {
         user32::MoveWindow(hwnd, 0, 0, w as i32, h as i32, 1);
@@ -687,7 +687,7 @@ extern "stdcall" fn dd_set_mode2(_this: u32, w: u32, h: u32, bpp: u32, _refresh:
     set_mode(w, h, bpp)
 }
 
-/// Espera o próximo "retraço vertical" (60 Hz). No modo captura o tempo é virtual: só avança o relógio.
+/// Waits for the next "vertical retrace" (60 Hz). In capture mode time is virtual: it only advances the clock.
 fn wait_vblank() {
     if user32::shot_mode() {
         user32::tick_virtual(16);
@@ -750,7 +750,7 @@ unsafe extern "stdcall" fn sf_qi(this: u32, riid: u32, out: *mut u32) -> u32 {
         }
         other => {
             if trace() {
-                eprintln!("[ddraw] Surface::QueryInterface: {other:#010x} não suportada");
+                eprintln!("[ddraw] Surface::QueryInterface: {other:#010x} not supported");
             }
             *out = 0;
             E_NOINTERFACE
@@ -776,7 +776,7 @@ extern "stdcall" fn sf_release(this: u32) -> u32 {
     let left = sf.refs;
     if left == 0 {
         let mut next = s.surfaces.remove(&this).map_or(0, |x| if x.primary { x.back } else { 0 });
-        // a primária leva junto os buffers de trás criados com ela
+        // the primary takes along the back buffers created with it
         while next != 0 && next != this {
             next = s.surfaces.remove(&next).map_or(0, |x| x.back);
         }
@@ -789,42 +789,42 @@ extern "stdcall" fn sf_release(this: u32) -> u32 {
 
 extern "stdcall" fn sf_ok1(this: u32) -> u32 {
     if trace() {
-        eprintln!("[ddraw] método sf_ok1 em {this:#x}");
+        eprintln!("[ddraw] method sf_ok1 on {this:#x}");
     }
     DD_OK
 }
 
 extern "stdcall" fn sf_ok2(this: u32, _a: u32) -> u32 {
     if trace() {
-        eprintln!("[ddraw] método sf_ok2 em {this:#x}");
+        eprintln!("[ddraw] method sf_ok2 on {this:#x}");
     }
     DD_OK
 }
 
 extern "stdcall" fn sf_ok3(this: u32, _a: u32, _b: u32) -> u32 {
     if trace() {
-        eprintln!("[ddraw] método sf_ok3 em {this:#x}");
+        eprintln!("[ddraw] method sf_ok3 on {this:#x}");
     }
     DD_OK
 }
 
 extern "stdcall" fn sf_unsupported2(this: u32, _a: u32) -> u32 {
     if trace() {
-        eprintln!("[ddraw] método sf_unsupported2 em {this:#x}");
+        eprintln!("[ddraw] method sf_unsupported2 on {this:#x}");
     }
     DDERR_UNSUPPORTED
 }
 
 extern "stdcall" fn sf_unsupported3(this: u32, _a: u32, _b: u32) -> u32 {
     if trace() {
-        eprintln!("[ddraw] método sf_unsupported3 em {this:#x}");
+        eprintln!("[ddraw] method sf_unsupported3 on {this:#x}");
     }
     DDERR_UNSUPPORTED
 }
 
 extern "stdcall" fn sf_unsupported4(this: u32, _a: u32, _b: u32, _c: u32) -> u32 {
     if trace() {
-        eprintln!("[ddraw] método sf_unsupported4 em {this:#x}");
+        eprintln!("[ddraw] method sf_unsupported4 on {this:#x}");
     }
     DDERR_UNSUPPORTED
 }
@@ -842,7 +842,7 @@ unsafe extern "stdcall" fn sf_get_uniqueness(_this: u32, out: *mut u32) -> u32 {
 
 extern "stdcall" fn sf_unsupported6(this: u32, _a: u32, _b: u32, _c: u32, _d: u32, _e: u32) -> u32 {
     if trace() {
-        eprintln!("[ddraw] método sf_unsupported6 em {this:#x}");
+        eprintln!("[ddraw] method sf_unsupported6 on {this:#x}");
     }
     DDERR_UNSUPPORTED
 }
@@ -852,7 +852,7 @@ extern "stdcall" fn sf_add_attached(this: u32, other: u32) -> u32 {
     if !s.surfaces.contains_key(&other) {
         return DDERR_INVALIDOBJECT;
     }
-    // Um z-buffer anexado não faz parte da cadeia de flip.
+    // An attached z-buffer is not part of the flip chain.
     let is_z = s.surfaces[&other].caps & DDSCAPS_ZBUFFER != 0;
     if let Some(sf) = s.surfaces.get_mut(&this) {
         if is_z {
@@ -913,7 +913,7 @@ unsafe extern "stdcall" fn sf_get_attached(this: u32, caps: u32, out: *mut u32) 
         }
         _ => {
             if trace() {
-                eprintln!("[ddraw] GetAttachedSurface({want:#x}): nenhuma");
+                eprintln!("[ddraw] GetAttachedSurface({want:#x}): none");
             }
             *out = 0;
             DDERR_NOTFOUND
@@ -962,7 +962,7 @@ unsafe extern "stdcall" fn sf_get_color_key(this: u32, flags: u32, out: u32) -> 
 
 unsafe extern "stdcall" fn sf_set_color_key(this: u32, flags: u32, key: u32) -> u32 {
     if flags & DDCKEY_COLORSPACE != 0 && trace() {
-        eprintln!("[ddraw] SetColorKey com faixa de cores (só o limite inferior é usado)");
+        eprintln!("[ddraw] SetColorKey with a color range (only the lower bound is used)");
     }
     let mut s = DD.lock().unwrap();
     let Some(sf) = s.surfaces.get_mut(&this) else { return DDERR_INVALIDOBJECT };
@@ -1000,7 +1000,7 @@ unsafe extern "stdcall" fn sf_set_palette(this: u32, pal: u32) -> u32 {
         let Some(sf) = s.surfaces.get_mut(&this) else { return DDERR_INVALIDOBJECT };
         sf.palette = pal;
         let primary = sf.primary;
-        // a paleta da primária vale para a cadeia de flip inteira
+        // the primary's palette applies to the whole flip chain
         if primary {
             let mut b = sf.back;
             while b != 0 && b != this {
@@ -1079,18 +1079,18 @@ unsafe extern "stdcall" fn sf_get_dd_interface(_this: u32, out: *mut u32) -> u32
     DD_OK
 }
 
-// ---- cores ----------------------------------------------------------------------------------
+// ---- colors ---------------------------------------------------------------------------------
 
-/// Paleta efetiva de uma superfície de 8 bits: a dela ou, sem paleta, a da primária.
+/// Effective palette of an 8-bit surface: its own or, without one, the primary's.
 fn palette_of(s: &State, sf: &Surface) -> [u32; 256] {
     let pal = if sf.palette != 0 { sf.palette } else { s.surfaces.get(&s.primary).map_or(0, |p| p.palette) };
     match s.palettes.get(&pal) {
         Some(p) => p.rgb,
-        None => std::array::from_fn(|i| 0xFF00_0000 | (i as u32) * 0x01_0101), // tons de cinza
+        None => std::array::from_fn(|i| 0xFF00_0000 | (i as u32) * 0x01_0101), // grayscale
     }
 }
 
-/// Converte a superfície inteira para 0xFFRRGGBB.
+/// Converts the whole surface to 0xFFRRGGBB.
 fn to_rgb(s: &State, sf: &Surface) -> Vec<u32> {
     let mut out = Vec::with_capacity((sf.w * sf.h) as usize);
     if sf.fmt.bpp == 8 {
@@ -1111,7 +1111,7 @@ fn to_rgb(s: &State, sf: &Surface) -> Vec<u32> {
     out
 }
 
-/// Valor de pixel mais próximo de uma cor 0xFFRRGGBB no formato da superfície.
+/// Pixel value closest to a 0xFFRRGGBB color in the surface format.
 fn from_rgb(f: Format, pal: &[u32; 256], c: u32) -> u32 {
     let (r, g, b) = ((c >> 16) & 0xFF, (c >> 8) & 0xFF, c & 0xFF);
     if f.bpp == 8 {
@@ -1126,9 +1126,9 @@ fn from_rgb(f: Format, pal: &[u32; 256], c: u32) -> u32 {
     }
 }
 
-// ---- apresentação -------------------------------------------------------------------------
+// ---- presentation -------------------------------------------------------------------------
 
-/// Copia a superfície primária para a janela do jogo.
+/// Copies the primary surface to the game window.
 fn present() {
     let (hwnd, w, h, px) = {
         let s = DD.lock().unwrap();
@@ -1138,7 +1138,7 @@ fn present() {
     if hwnd == 0 {
         return;
     }
-    // A primária cobre a tela inteira; a janela mostra a parte que fica sob a sua área cliente.
+    // The primary covers the whole screen; the window shows the part under its client area.
     let (ox, oy) = user32::client_screen_origin(hwnd);
     user32::with_buf(hwnd, |buf, cw, ch| {
         for y in 0..ch {
@@ -1157,8 +1157,8 @@ fn present() {
     frame_done();
 }
 
-/// Conta quadros. No modo captura, `WINLAYER_DDRAW_FRAMES` (padrão 300) quadros encerram o programa
-/// salvando o PNG (um jogo de DirectDraw nunca fica ocioso).
+/// Counts frames. In capture mode, `WINLAYER_DDRAW_FRAMES` (default 300) frames exit the program
+/// and save the PNG (a DirectDraw game is never idle).
 fn frame_done() {
     let n = FRAMES.fetch_add(1, Ordering::Relaxed) + 1;
     if user32::shot_mode() {
@@ -1178,7 +1178,7 @@ unsafe extern "stdcall" fn sf_flip(this: u32, _target: u32, _flags: u32) -> u32 
     }
     {
         let mut s = DD.lock().unwrap();
-        // gira a memória pela cadeia: frente <- trás1 <- trás2 ... <- frente
+        // rotates the memory through the chain: front <- back1 <- back2 ... <- front
         let mut chain = vec![this];
         let mut b = s.surfaces.get(&this).map_or(0, |x| x.back);
         while b != 0 && b != this && chain.len() < 8 {
@@ -1201,14 +1201,14 @@ unsafe extern "stdcall" fn sf_flip(this: u32, _target: u32, _flags: u32) -> u32 
 
 // ---- Blt ------------------------------------------------------------------------------------
 
-/// Copia (com escala e chave de cor opcionais) de `src` para `dst`. Retângulos [l, t, r, b).
+/// Copies (with optional scaling and color key) from `src` to `dst`. Rectangles [l, t, r, b).
 fn blit(s: &mut State, dst: u32, d: (i32, i32, i32, i32), src: u32, sr: (i32, i32, i32, i32), key: Option<u32>) -> u32 {
     let (dw, dh) = (d.2 - d.0, d.3 - d.1);
     let (sw, sh) = (sr.2 - sr.0, sr.3 - sr.1);
     if dw <= 0 || dh <= 0 || sw <= 0 || sh <= 0 {
         return DD_OK;
     }
-    // Lê a origem antes (permite origem == destino, ex.: rolagem).
+    // Reads the source first (allows source == destination, e.g. scrolling).
     let Some(so) = s.surfaces.get(&src) else { return DDERR_INVALIDOBJECT };
     let sfmt = so.fmt;
     let (sw_full, sh_full) = (so.w, so.h);
@@ -1257,7 +1257,7 @@ fn blit(s: &mut State, dst: u32, d: (i32, i32, i32, i32), src: u32, sr: (i32, i3
     DD_OK
 }
 
-/// Copia uma superfície inteira para outra, com a paleta (IDirect3DTexture2::Load).
+/// Copies one whole surface to another, with the palette (IDirect3DTexture2::Load).
 pub fn copy_surface(dst: u32, src: u32) -> u32 {
     let mut s = DD.lock().unwrap();
     let Some(so) = s.surfaces.get(&src) else { return DDERR_INVALIDOBJECT };
@@ -1371,7 +1371,7 @@ extern "stdcall" fn sf_release_dc(this: u32, _hdc: u32) -> u32 {
         let sf = s.surfaces.get_mut(&this).unwrap();
         let fmt = sf.fmt;
         let mut cache: BTreeMap<u32, u32> = BTreeMap::new();
-        // só os pixels que o GDI mudou voltam (evita perder precisão no resto)
+        // only the pixels GDI changed come back (avoids losing precision in the rest)
         for (i, (&a, &b)) in after.iter().zip(&before).enumerate() {
             if a != b {
                 let v = *cache.entry(a).or_insert_with(|| from_rgb(fmt, &pal, a));
@@ -1411,7 +1411,7 @@ extern "stdcall" fn pal_addref(this: u32) -> u32 {
 }
 
 extern "stdcall" fn pal_release(this: u32) -> u32 {
-    // A paleta continua guardada enquanto alguma superfície a usa (o jogo costuma soltá-la logo após SetPalette).
+    // The palette stays stored while some surface uses it (games often release it right after SetPalette).
     let mut s = DD.lock().unwrap();
     s.palettes.get_mut(&this).map_or(0, |p| {
         p.refs = p.refs.saturating_sub(1).max(1);
@@ -1522,7 +1522,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn canais_565_ida_e_volta() {
+    fn rgb565_channels_round_trip() {
         let f = Format::of_bpp(16);
         let v = unchannel(255, f.r) | unchannel(128, f.g) | unchannel(0, f.b);
         assert_eq!(channel(v, f.r), 255);
@@ -1531,7 +1531,7 @@ mod tests {
     }
 
     #[test]
-    fn surface_put_get_24bits() {
+    fn surface_put_get_24_bits() {
         let mut s = Surface::new(3, 2, Format::of_bpp(24), 0);
         s.put(2, 1, 0x12_3456);
         assert_eq!(s.get(2, 1), 0x12_3456);

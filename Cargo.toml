@@ -1,6 +1,6 @@
 [package]
 name = "winlayer"
-version = "0.0.2"
+version = "0.0.3"
 edition = "2021"
 license = "GPL-3.0-only"
 description = "Compatibility layer that runs old Windows games on Linux"

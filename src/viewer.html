@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="pt-br">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -17,23 +17,23 @@
 <body>
 <canvas id="c" width="640" height="480" tabindex="0"></canvas>
 <div class="bar">
-  <span id="status">conectando…</span>
-  <button id="scale">Escala: 1×</button>
-  <span>clique na tela para ativar teclado e som</span>
+  <span id="status">connecting…</span>
+  <button id="scale">Scale: 1×</button>
+  <span>click the screen to enable keyboard and sound</span>
 </div>
 <script>
 let W = 640, H = 480;
 const canvas = document.getElementById('c');
 const ctx = canvas.getContext('2d');
 const status = document.getElementById('status');
-let version = null;     // última versão de quadro recebida
-let queue = [];         // eventos de entrada pendentes (texto, uma linha cada)
-let move = null;        // último movimento do mouse (coalescido)
+let version = null;     // last frame version received
+let queue = [];         // pending input events (text, one line each)
+let move = null;        // last mouse movement (coalesced)
 let scale = 1;
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
-// ---- quadros: long-poll, o servidor só responde quando algo mudou -------------------------
+// ---- frames: long-poll, the server only replies when something changed -------------------------
 async function frames() {
   for (;;) {
     try {
@@ -44,15 +44,15 @@ async function frames() {
       if (nw !== W || nh !== H) { W = nw; H = nh; canvas.width = W; canvas.height = H; canvas.style.width = (W * scale) + 'px'; canvas.style.height = (H * scale) + 'px'; }
       const rgba = new Uint8ClampedArray(await r.arrayBuffer());
       if (rgba.length === W * H * 4) ctx.putImageData(new ImageData(rgba, W, H), 0, 0);
-      status.textContent = 'quadro ' + version;
+      status.textContent = 'frame ' + version;
     } catch (e) {
-      status.textContent = 'sem conexão';
+      status.textContent = 'no connection';
       await sleep(500);
     }
   }
 }
 
-// ---- entrada: agrupada a ~60 Hz num único POST ---------------------------------------------
+// ---- input: batched at ~60 Hz into a single POST -----------------------------------------------
 function flush() {
   if (move) { queue.unshift('m ' + move[0] + ' ' + move[1]); move = null; }
   if (!queue.length) return;
@@ -78,7 +78,7 @@ window.addEventListener('mouseup', e => {
 });
 canvas.addEventListener('contextmenu', e => e.preventDefault());
 
-// keyCode do JS coincide com o código de tecla virtual (VK_*) do Windows para quase tudo.
+// JS keyCode matches the Windows virtual key code (VK_*) for almost everything.
 canvas.addEventListener('keydown', e => {
   queue.push('kd ' + e.keyCode);
   if (e.key.length === 1 && !e.ctrlKey && !e.altKey && !e.metaKey) queue.push('ch ' + e.key.charCodeAt(0));
@@ -94,16 +94,16 @@ document.getElementById('scale').onclick = ev => {
   scale = scale === 1 ? 2 : 1;
   canvas.style.width = (W * scale) + 'px';
   canvas.style.height = (H * scale) + 'px';
-  ev.target.textContent = 'Escala: ' + scale + '×';
+  ev.target.textContent = 'Scale: ' + scale + '×';
   canvas.focus();
 };
 
-// ---- áudio: o winlayer publica eventos; aqui decodificamos o WAV e tocamos com Web Audio ------
+// ---- audio: winlayer publishes events; here we decode the WAV and play it with Web Audio ------
 let actx = null;
 const decoded = new Map();      // id -> Promise<AudioBuffer>
-let sources = [];               // fontes em reprodução (para `stop`)
-let current = null;             // som "único" atual: sndPlaySound toca um por vez
-let streamAt = 0;               // instante em que o fluxo waveOut termina
+let sources = [];               // sources being played (for `stop`)
+let current = null;             // current "single" sound: sndPlaySound plays one at a time
+let streamAt = 0;               // instant at which the waveOut stream ends
 let aseq = 0;
 
 function ensureAudio() {
@@ -120,7 +120,7 @@ function getBuffer(id) {
 }
 
 async function onAudio(op, id, mode) {
-  if (!actx || actx.state !== 'running') return;   // sem gesto do usuário ainda: ignora
+  if (!actx || actx.state !== 'running') return;   // no user gesture yet: ignore
   if (op === 'stop') {
     sources.forEach(s => { try { s.stop(); } catch (e) {} });
     sources = []; streamAt = 0; current = null;
@@ -134,7 +134,7 @@ async function onAudio(op, id, mode) {
   src.connect(actx.destination);
   let when = actx.currentTime;
   if (mode === 'stream') { when = Math.max(actx.currentTime, streamAt); streamAt = when + buf.duration; }
-  if (mode !== 'stream') {      // um novo som interrompe o anterior (como no Windows)
+  if (mode !== 'stream') {      // a new sound interrupts the previous one (as in Windows)
     if (current) { try { current.stop(); } catch (e) {} }
     current = src;
   }

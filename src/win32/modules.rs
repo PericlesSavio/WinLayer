@@ -1,4 +1,4 @@
-//! Módulos carregados: DLLs do sistema implementadas pelo winlayer ("builtin") e DLLs PE do disco.
+//! Loaded modules: system DLLs implemented by winlayer ("builtin") and PE DLLs from disk.
 
 use crate::loader;
 use crate::pe::{ImportName, Pe32, IMAGE_FILE_DLL};
@@ -6,20 +6,20 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::Mutex;
 
-/// DLLs cujas funções são implementadas em Rust (módulos de `win32/`).
-/// `_inmm.dll` é a "winmm" da GOG (emula o áudio do CD com OGG): é tratada como a winmm interna, sem carregar a DLL.
+/// DLLs whose functions are implemented in Rust (modules of `win32/`).
+/// `_inmm.dll` is GOG's "winmm" (emulates CD audio with OGG): it is treated as the internal winmm, without loading the DLL.
 const BUILTIN: [&str; 16] = ["msvcrt.dll", "imm32.dll", "wsock32.dll", "dinput.dll", "shell32.dll", "_inmm.dll", "kernel32.dll", "user32.dll", "gdi32.dll", "advapi32.dll", "ole32.dll", "oleaut32.dll", "comctl32.dll", "winmm.dll", "ddraw.dll", "dsound.dll"];
-/// HMODULEs fictícios dos builtins: BUILTIN_BASE + índice * 0x10000.
+/// Fictitious HMODULEs of the builtins: BUILTIN_BASE + index * 0x10000.
 const BUILTIN_BASE: u32 = 0x7800_0000;
 
 struct Module {
     name: String,
-    /// Caminho como o programa o vê (`C:\...`; o diretório do .exe é `C:\`).
+    /// Path as the program sees it (`C:\...`; the .exe directory is `C:\`).
     win_path: String,
     base: u32,
     exports: BTreeMap<String, u32>,
     by_ordinal: BTreeMap<u32, u32>,
-    /// Intervalo do diretório de exports (para detectar forwarders).
+    /// Range of the exports directory (to detect forwarders).
     export_range: (u32, u32),
 }
 
@@ -40,7 +40,7 @@ fn builtin_index(n: &str) -> Option<usize> {
     BUILTIN.iter().position(|b| *b == n)
 }
 
-/// HMODULE de um módulo já carregado (ou de um builtin).
+/// HMODULE of an already loaded module (or of a builtin).
 pub fn module_handle(name: &str) -> Option<u32> {
     let n = norm(name);
     if let Some(i) = builtin_index(&n) {
@@ -86,14 +86,14 @@ unsafe fn read_exports(pe: &Pe32, base: u32) -> Module {
     m
 }
 
-/// Caminho estilo Windows de um arquivo do host: relativo ao diretório do .exe (que é `C:\`).
+/// Windows-style path of a host file: relative to the .exe directory (which is `C:\`).
 fn win_path_of(host: &std::path::Path) -> String {
     let rel = super::files::root().and_then(|r| host.strip_prefix(r).ok().map(|p| p.to_path_buf()));
     let rel = rel.unwrap_or_else(|| host.file_name().map(PathBuf::from).unwrap_or_default());
     format!("C:\\{}", rel.to_string_lossy().replace('/', "\\"))
 }
 
-/// Nome de arquivo (estilo Windows) do módulo carregado em `base`; `None` se não for um módulo conhecido.
+/// File name (Windows-style) of the module loaded at `base`; `None` if it is not a known module.
 pub fn module_file_name(base: u32) -> Option<String> {
     if base >= BUILTIN_BASE && base < BUILTIN_BASE + BUILTIN.len() as u32 * 0x10000 {
         let dll = BUILTIN[((base - BUILTIN_BASE) / 0x10000) as usize];
@@ -102,7 +102,7 @@ pub fn module_file_name(base: u32) -> Option<String> {
     MODULES.lock().unwrap().iter().find(|m| m.base == base).map(|m| m.win_path.clone())
 }
 
-/// Carrega uma DLL (ou devolve a já carregada). Os builtins devolvem um HMODULE fictício.
+/// Loads a DLL (or returns the already loaded one). Builtins return a fictitious HMODULE.
 pub fn load_library(name: &str) -> Option<u32> {
     if let Some(h) = module_handle(name) {
         return Some(h);
@@ -118,12 +118,12 @@ pub fn load_library(name: &str) -> Option<u32> {
     let mut module = unsafe { read_exports(&pe, base) };
     module.name = n.clone();
     module.win_path = win_path_of(&path);
-    // Registra antes de resolver imports (dependências circulares).
+    // Registers before resolving imports (circular dependencies).
     MODULES.lock().unwrap().push(module);
 
     let missing = loader::fill_imports(&pe, base);
     if !missing.is_empty() {
-        eprintln!("[winlayer] {n}: {} imports não implementados", missing.len());
+        eprintln!("[winlayer] {n}: {} imports not implemented", missing.len());
     }
     if pe.entry_rva != 0 {
         // DllMain(hinst, DLL_PROCESS_ATTACH, NULL)
@@ -137,7 +137,7 @@ pub enum Proc<'a> {
     Ordinal(u32),
 }
 
-/// Endereço de uma função exportada por um módulo.
+/// Address of a function exported by a module.
 pub fn get_proc(module: u32, proc_: Proc) -> Option<u32> {
     if module >= BUILTIN_BASE && module < BUILTIN_BASE + BUILTIN.len() as u32 * 0x10000 {
         let dll = BUILTIN[((module - BUILTIN_BASE) / 0x10000) as usize];
@@ -156,7 +156,7 @@ pub fn get_proc(module: u32, proc_: Proc) -> Option<u32> {
         (rva, m.export_range, m.name.clone())
     };
     if rva >= range.0 && rva < range.1 {
-        // Forwarder "OUTRA.Funcao": resolve no módulo indicado.
+        // Forwarder "OTHER.Function": resolves in the indicated module.
         let s = unsafe { std::ffi::CStr::from_ptr((module + rva) as usize as *const i8) }.to_string_lossy().into_owned();
         let (dll, f) = s.split_once('.')?;
         eprintln!("[winlayer] forwarder {name} -> {s}");
@@ -165,7 +165,7 @@ pub fn get_proc(module: u32, proc_: Proc) -> Option<u32> {
     Some(module + rva)
 }
 
-/// Resolve um import `dll!nome`: builtin do winlayer ou DLL PE carregada do disco.
+/// Resolves a `dll!name` import: winlayer builtin or PE DLL loaded from disk.
 pub fn resolve_import(dll: &str, name: &ImportName) -> Option<u32> {
     let n = norm(dll);
     let proc_ = match name {

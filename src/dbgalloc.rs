@@ -1,5 +1,5 @@
-//! Alocador de depuração (ativado por `WINLAYER_HEAPCHECK=1`): cerca cada alocação com canários e
-//! permite conferir todas as alocações vivas (`check_all`), para achar escritas fora de buffers.
+//! Debug allocator (enabled by `WINLAYER_HEAPCHECK=1`): surrounds each allocation with canaries and
+//! allows checking all live allocations (`check_all`), to find writes outside buffers.
 
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -12,7 +12,7 @@ const MAGIC: u8 = 0xA5;
 const SLOTS: usize = 1 << 16;
 
 static ENABLED: AtomicBool = AtomicBool::new(false);
-/// Modo "bump": nunca libera; evita o malloc do musl (para isolar corrupção de metadados dele).
+/// "Bump" mode: never frees; avoids musl's malloc (to isolate corruption of its metadata).
 static BUMP: AtomicBool = AtomicBool::new(false);
 static BUMP_BASE: AtomicUsize = AtomicUsize::new(0);
 static BUMP_POS: AtomicUsize = AtomicUsize::new(0);
@@ -26,8 +26,8 @@ extern "C" {
     fn mprotect(addr: *mut u8, len: usize, prot: i32) -> i32;
 }
 
-/// Com o modo bump, torna o heap do host somente-leitura enquanto o código de 16 bits executa: uma
-/// escrita errada vira SIGSEGV com o CS:IP do culpado. `on=false` volta a liberar a escrita.
+/// In bump mode, makes the host heap read-only while 16-bit code runs: a
+/// stray write becomes a SIGSEGV with the culprit's CS:IP. `on=false` allows writes again.
 static GUARD: AtomicBool = AtomicBool::new(false);
 
 pub fn enable_guard() {
@@ -51,7 +51,7 @@ pub fn enable_bump() {
     BUMP.store(true, Ordering::SeqCst);
 }
 static LOCK: AtomicBool = AtomicBool::new(false);
-// (ponteiro do usuário, tamanho) — tabela aberta com sondagem linear; ponteiro 0 = vazio
+// (user pointer, size) — open-addressing table with linear probing; pointer 0 = empty
 static mut TABLE: [(usize, usize); SLOTS] = [(0, 0); SLOTS];
 static LIVE: AtomicUsize = AtomicUsize::new(0);
 
@@ -98,7 +98,7 @@ unsafe impl GlobalAlloc for Dbg {
         let mut i = slot(user as usize);
         #[allow(static_mut_refs)]
         while TABLE[i].0 != 0 && TABLE[i].0 != usize::MAX {
-            i = (i + 1) % SLOTS; // reaproveita lápides
+            i = (i + 1) % SLOTS; // reuses tombstones
         }
         TABLE[i] = (user as usize, l.size());
         LIVE.fetch_add(1, Ordering::Relaxed);
@@ -118,7 +118,7 @@ unsafe impl GlobalAlloc for Dbg {
         let mut found = false;
         for _ in 0..SLOTS {
             if TABLE[i].0 == p as usize {
-                TABLE[i] = (usize::MAX, 0); // lápide
+                TABLE[i] = (usize::MAX, 0); // tombstone
                 found = true;
                 break;
             }
@@ -129,7 +129,7 @@ unsafe impl GlobalAlloc for Dbg {
         }
         unlock();
         if !found {
-            // alocada antes de ativar o alocador de depuração
+            // allocated before the debug allocator was enabled
             return System.dealloc(p, l);
         }
         verify(p as usize, l.size(), "free");
@@ -138,7 +138,7 @@ unsafe impl GlobalAlloc for Dbg {
     }
 }
 
-/// Escreve texto no stderr sem alocar (o alocador de depuração não pode se chamar).
+/// Writes text to stderr without allocating (the debug allocator cannot call itself).
 fn raw_print(bytes: &[u8]) {
     extern "C" {
         fn write(fd: i32, buf: *const u8, n: usize) -> isize;
@@ -178,13 +178,13 @@ unsafe fn verify(user: usize, size: usize, when: &str) -> bool {
             }
         }
     };
-    put(b"\n[heapcheck] CORRUPCAO ", &mut out, &mut n);
+    put(b"\n[heapcheck] CORRUPTION ", &mut out, &mut n);
     put(when.as_bytes(), &mut out, &mut n);
-    put(b": bloco ", &mut out, &mut n);
+    put(b": block ", &mut out, &mut n);
     hex_into(&mut out, &mut n, user);
-    put(b" tamanho ", &mut out, &mut n);
+    put(b" size ", &mut out, &mut n);
     hex_into(&mut out, &mut n, size);
-    put(if bad_pre.is_some() { b" ANTES:" } else { b" DEPOIS:" }, &mut out, &mut n);
+    put(if bad_pre.is_some() { b" BEFORE:" } else { b" AFTER:" }, &mut out, &mut n);
     let at = if bad_pre.is_some() { pre } else { post };
     for k in 0..24 {
         let b = *((at + k) as *const u8);
@@ -196,7 +196,7 @@ unsafe fn verify(user: usize, size: usize, when: &str) -> bool {
 }
 
 
-/// Confere os canários de todas as alocações vivas; devolve quantas estão corrompidas.
+/// Checks the canaries of all live allocations; returns how many are corrupted.
 pub fn check_all(tag: &str) -> usize {
     if !ENABLED.load(Ordering::Relaxed) {
         return 0;

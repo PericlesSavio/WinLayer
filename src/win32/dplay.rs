@@ -1,9 +1,9 @@
-//! DirectPlay Lobby (dplayx.dll) mínimo: o objeto existe, mas não há lobby nem provedores de rede.
+//! Minimal DirectPlay Lobby (dplayx.dll): the object exists, but there is no lobby or network providers.
 //!
-//! Jogos como o Revenant criam um `IDirectPlayLobby` (via `CoCreateInstance`) na inicialização e
-//! desistem se ele não existir. Aqui ele responde "o programa não foi iniciado por um lobby" e lista
-//! zero provedores/aplicações, então o jogo segue só com o modo de um jogador. O `IDirectPlay4` também
-//! existe e lista zero conexões e zero sessões; criar jogadores, abrir sessões e enviar dados falham.
+//! Games like Revenant create an `IDirectPlayLobby` (via `CoCreateInstance`) at startup and
+//! give up if it does not exist. Here it answers "the program was not started by a lobby" and lists
+//! zero providers/applications, so the game carries on in single-player mode only. `IDirectPlay4` also
+//! exists and lists zero connections and zero sessions; creating players, opening sessions and sending data fail.
 
 use std::sync::OnceLock;
 
@@ -12,12 +12,12 @@ const E_NOINTERFACE: u32 = 0x8000_4002;
 const DPERR_UNSUPPORTED: u32 = 0x8000_4001;
 /// MAKE_DPHRESULT(1070)
 const DPERR_NOTLOBBIED: u32 = 0x8877_042E;
-/// MAKE_DPHRESULT(160) — sem conexão (ConnectEx)
+/// MAKE_DPHRESULT(160) — no connection (ConnectEx)
 const DPERR_NOCONNECTION: u32 = 0x8877_00A0;
 
-/// Primeiro dword de CLSID_DirectPlayLobby {2FE8F810-B2A5-11D0-A787-0000F803ABFC}.
+/// First dword of CLSID_DirectPlayLobby {2FE8F810-B2A5-11D0-A787-0000F803ABFC}.
 pub const CLSID_DIRECTPLAYLOBBY: u32 = 0x2FE8_F810;
-/// Primeiro dword de CLSID_DirectPlay {D1EB6D20-8923-11D0-9D97-00A0C90A43CB}.
+/// First dword of CLSID_DirectPlay {D1EB6D20-8923-11D0-9D97-00A0C90A43CB}.
 pub const CLSID_DIRECTPLAY: u32 = 0xD1EB_6D20;
 
 fn trace() -> bool {
@@ -31,10 +31,10 @@ macro_rules! vtable {
     }};
 }
 
-/// Cria o objeto do lobby (IDirectPlayLobbyA/2A/3A: a vtable da versão 3 contém as anteriores).
+/// Creates the lobby object (IDirectPlayLobbyA/2A/3A: the version 3 vtable contains the earlier ones).
 pub fn create_lobby() -> u32 {
     if trace() {
-        eprintln!("[dplay] objeto IDirectPlayLobby criado");
+        eprintln!("[dplay] IDirectPlayLobby object created");
     }
     Box::leak(Box::new(lobby_vtbl().as_ptr() as u32)) as *mut u32 as u32
 }
@@ -65,7 +65,7 @@ unsafe extern "stdcall" fn qi(this: u32, riid: u32, out: *mut u32) -> u32 {
         *out = this;
         DP_OK
     } else {
-        log(&format!("QueryInterface {first:#010x}: não suportada"));
+        log(&format!("QueryInterface {first:#010x}: not supported"));
         *out = 0;
         E_NOINTERFACE
     }
@@ -152,18 +152,18 @@ extern "stdcall" fn wait_for_connection_settings(_this: u32, _flags: u32) -> u32
     DPERR_NOTLOBBIED
 }
 
-// ---- IDirectPlay2/3/4 (A e W têm a mesma vtable) --------------------------------------------
+// ---- IDirectPlay2/3/4 (A and W share the same vtable) ---------------------------------------
 
-/// Cria o objeto IDirectPlay4A.
+/// Creates the IDirectPlay4A object.
 pub fn create_dplay() -> u32 {
     if trace() {
-        eprintln!("[dplay] objeto IDirectPlay4 criado");
+        eprintln!("[dplay] IDirectPlay4 object created");
     }
     Box::leak(Box::new(dplay_vtbl().as_ptr() as u32)) as *mut u32 as u32
 }
 
-// Métodos sem efeito, pelo número total de argumentos (contando `this`): no stdcall quem é chamado limpa
-// a pilha, então cada entrada precisa ter exatamente a aridade do método que ocupa.
+// No-op methods, by total argument count (including `this`): in stdcall the callee cleans
+// the stack, so each entry must have exactly the arity of the method it occupies.
 extern "stdcall" fn ok1(_t: u32) -> u32 { DP_OK }
 extern "stdcall" fn ok2(_t: u32, _a: u32) -> u32 { DP_OK }
 extern "stdcall" fn ok5(_t: u32, _a: u32, _b: u32, _c: u32, _d: u32) -> u32 { DP_OK }
@@ -186,7 +186,7 @@ unsafe extern "stdcall" fn dp_qi(this: u32, riid: u32, out: *mut u32) -> u32 {
         *out = this;
         DP_OK
     } else {
-        log(&format!("IDirectPlay::QueryInterface {first:#010x}: não suportada"));
+        log(&format!("IDirectPlay::QueryInterface {first:#010x}: not supported"));
         *out = 0;
         E_NOINTERFACE
     }

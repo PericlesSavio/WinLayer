@@ -1,7 +1,7 @@
-//! USER.EXE do Windows 3.x (janelas, mensagens, diálogos, menus), sobre o `win32::user32`.
+//! Windows 3.x USER.EXE (windows, messages, dialogs, menus), on top of `win32::user32`.
 //!
-//! Diferenças tratadas aqui: handles e parâmetros de 16 bits, estruturas (RECT, MSG, WNDCLASS,
-//! PAINTSTRUCT, CREATESTRUCT...) com campos de 16 bits, `wParam` de 16 bits e ponteiros far.
+//! Differences handled here: 16-bit handles and parameters, structures (RECT, MSG, WNDCLASS,
+//! PAINTSTRUCT, CREATESTRUCT...) with 16-bit fields, 16-bit `wParam` and far pointers.
 
 use super::api::{far_to_linear, Call, Impl};
 use super::ldt::{self, Kind};
@@ -47,9 +47,9 @@ fn dgroup() -> u16 {
     kernel::with_process(|p| p.dgroup_sel)
 }
 
-// ---- conversão de mensagens entre Win32 (user32) e Win16 ------------------------------------
+// ---- message conversion between Win32 (user32) and Win16 ------------------------------------
 
-/// Recursos alocados só para uma chamada (blocos globais e seletores temporários).
+/// Resources allocated for a single call only (global blocks and temporary selectors).
 #[derive(Default)]
 struct Scratch {
     sels: Vec<u16>,
@@ -87,13 +87,13 @@ const WM_HSCROLL: u32 = 0x114;
 const WM_VSCROLL: u32 = 0x115;
 const WM_TIMER: u32 = 0x113;
 
-/// Win32 (como o user32 envia) -> argumentos de um WndProc de 16 bits: (msg, wParam, lParam).
+/// Win32 (as user32 sends it) -> arguments of a 16-bit WndProc: (msg, wParam, lParam).
 fn to16(msg: u32, w: u32, l: u32, sc: &mut Scratch) -> (u16, u16, u32) {
     match msg {
         WM_COMMAND => ((msg) as u16, w as u16, ((w >> 16) << 16) | (l & 0xFFFF)),
         WM_VSCROLL | WM_HSCROLL => (msg as u16, w as u16, (l << 16) | (w >> 16)),
         WM_CREATE | WM_NCCREATE if l != 0 => {
-            // CREATESTRUCT de 16 bits (34 bytes) num bloco temporário
+            // 16-bit CREATESTRUCT (34 bytes) in a temporary block
             let Some(h) = kernel::global_alloc(64) else { return (msg as u16, w as u16, 0) };
             let (base, _) = kernel::global_info(h).unwrap();
             let s32 = l as usize as *const u32;
@@ -112,11 +112,11 @@ fn to16(msg: u32, w: u32, l: u32, sc: &mut Scratch) -> (u16, u16, u32) {
                 wr32(base + 26, 0);
                 wr32(base + 30, 0);
             }
-            sc.sels.push(h); // liberado pelo Drop? (é bloco global: liberado pelo chamador)
+            sc.sels.push(h); // freed by Drop? (it is a global block: freed by the caller)
             (msg as u16, w as u16, (h as u32) << 16)
         }
         WM_DRAWITEM if l != 0 => {
-            // DRAWITEMSTRUCT de 16 bits (22 bytes): CtlType, CtlID, itemID, itemAction, itemState, hwndItem, hDC (words), rcItem (4 words), itemData (dword)
+            // 16-bit DRAWITEMSTRUCT (22 bytes): CtlType, CtlID, itemID, itemAction, itemState, hwndItem, hDC (words), rcItem (4 words), itemData (dword)
             let s32 = l as usize as *const u32;
             let mut b = vec![0u8; 22].into_boxed_slice();
             unsafe {
@@ -139,7 +139,7 @@ fn to16(msg: u32, w: u32, l: u32, sc: &mut Scratch) -> (u16, u16, u32) {
     }
 }
 
-/// Argumentos de um programa Win16 (SendMessage, DefWindowProc...) -> semântica do user32.
+/// Arguments from a Win16 program (SendMessage, DefWindowProc...) -> user32 semantics.
 fn to32(hwnd: u32, msg: u32, w: u16, l: u32) -> (u32, u32, u32) {
     let w = w as u32;
     match msg {
@@ -148,7 +148,7 @@ fn to32(hwnd: u32, msg: u32, w: u16, l: u32) -> (u32, u32, u32) {
         WM_GETTEXT | WM_SETTEXT => (msg, w, far_to_linear(l)),
         0x400..=0x403 if user32::class_of(hwnd).eq_ignore_ascii_case("button") => (msg - 0x400 + 0xF0, w, l), // BM_*
         0x401..=0x423 if user32::class_of(hwnd).eq_ignore_ascii_case("listbox") => {
-            // LB_*: WM_USER+n do Win16 vira 0x180+n-1; lParam é ponteiro far para texto/buffer nestas mensagens
+            // LB_*: Win16 WM_USER+n becomes 0x180+n-1; lParam is a far pointer to text/buffer in these messages
             let m32 = msg - 0x401 + 0x180;
             let ptr = matches!(m32, 0x180 | 0x181 | 0x189 | 0x18C | 0x18F | 0x1A2);
             (m32, w, if ptr { far_to_linear(l) } else { l })
@@ -157,11 +157,11 @@ fn to32(hwnd: u32, msg: u32, w: u16, l: u32) -> (u32, u32, u32) {
     }
 }
 
-/// Gancho do `user32`: chama um WndProc/DlgProc de 16 bits.
+/// `user32` hook: calls a 16-bit WndProc/DlgProc.
 pub fn call_proc16(far: u32, hwnd: u32, msg: u32, w: u32, l: u32) -> u32 {
     let mut sc = Scratch::default();
     let (m16, w16, l16) = to16(msg, w, l, &mut sc);
-    // bloco global de CREATESTRUCT, se houver (o seletor está em sc.sels como "bloco", não temporário)
+    // CREATESTRUCT global block, if any (the selector is in sc.sels as a "block", not temporary)
     let created: Option<u16> = if matches!(msg, WM_CREATE | WM_NCCREATE) && l != 0 { sc.sels.pop() } else { None };
     let r = trans_call(far, &[hwnd as u16, m16, w16, (l16 >> 16) as u16, l16 as u16]);
     if let Some(h) = created {
@@ -170,14 +170,14 @@ pub fn call_proc16(far: u32, hwnd: u32, msg: u32, w: u32, l: u32) -> u32 {
     r
 }
 
-/// Chama um procedimento de 16 bits dado por um ponteiro far; devolve DX:AX.
+/// Calls a 16-bit procedure given by a far pointer; returns DX:AX.
 pub fn trans_call(far: u32, args: &[u16]) -> u32 {
     let rt = super::rt();
     let (ax, dx) = trans::call16(&rt.thunks, &mut rt.stack, (far >> 16) as u16, far as u16, dgroup(), args);
     pack(ax, dx)
 }
 
-// ---- menus de 16 bits ---------------------------------------------------------------------
+// ---- 16-bit menus ---------------------------------------------------------------------
 
 fn parse_menu16(b: &[u8], mut p: usize) -> (Vec<menu::Item>, usize) {
     let mut items = Vec::new();
@@ -213,7 +213,7 @@ fn parse_menu16(b: &[u8], mut p: usize) -> (Vec<menu::Item>, usize) {
     (items, p)
 }
 
-/// Carrega o menu `name` (RT_MENU 4) dos recursos NE; devolve o HMENU.
+/// Loads menu `name` (RT_MENU 4) from the NE resources; returns the HMENU.
 pub fn load_menu16(raw_name: u32) -> u32 {
     let Some(b) = kernel_ext::resource_bytes(&ResKey::Id(4), &kernel_ext::key_of_far(raw_name)) else { return 0 };
     let skip = if b.len() >= 4 { 4 + u16::from_le_bytes([b[2], b[3]]) as usize } else { return 0 };
@@ -221,7 +221,7 @@ pub fn load_menu16(raw_name: u32) -> u32 {
     menu::add(items)
 }
 
-// ---- diálogos de 16 bits ------------------------------------------------------------------
+// ---- 16-bit dialogs -------------------------------------------------------------------
 
 unsafe fn skip_name(p: u32) -> u32 {
     match *(p as usize as *const u8) {
@@ -236,15 +236,15 @@ unsafe fn create_dialog16(tmpl: u32, parent: u32, dlgproc: u32, param: u32) -> u
     let cdit = *((tmpl + 4) as usize as *const u8) as usize;
     let (dcx, dcy) = (rd16(tmpl + 9) as i32, rd16(tmpl + 11) as i32);
     let mut p = skip_name(tmpl + 13); // menu
-    p = skip_name(p); // classe
+    p = skip_name(p); // class
     let title = cstr_at(p);
     p += title.len() as u32 + 1;
     if style & 0x40 != 0 {
         p += 2;
-        p += cstr_at(p).len() as u32 + 1; // fonte
+        p += cstr_at(p).len() as u32 + 1; // font
     }
     if std::env::var_os("WINLAYER_WIN16_TRACE").is_some() {
-        eprintln!("[win16] diálogo: style={style:#x} itens={cdit} {dcx}x{dcy} título={title:?}");
+        eprintln!("[win16] dialog: style={style:#x} items={cdit} {dcx}x{dcy} title={title:?}");
     }
     let (ux, uy) = user32::dlu();
     let (cw, ch) = (dcx * ux / 4, dcy * uy / 8);
@@ -281,9 +281,9 @@ unsafe fn create_dialog16(tmpl: u32, parent: u32, dlgproc: u32, param: u32) -> u
             p += t.len() as u32 + 1;
             t
         };
-        p += 1 + *(p as usize as *const u8) as u32; // dados extras (contador de 1 byte)
+        p += 1 + *(p as usize as *const u8) as u32; // extra data (1-byte counter)
         if std::env::var_os("WINLAYER_WIN16_TRACE").is_some() {
-            eprintln!("[win16]   item id={id} class={class:?} style={istyle:#x} texto={text:?} @{ix},{iy} {icx}x{icy}");
+            eprintln!("[win16]   item id={id} class={class:?} style={istyle:#x} text={text:?} @{ix},{iy} {icx}x{icy}");
         }
         let child = user32::create_window(
             class, text, istyle | user32::WS_CHILD, ix * ux / 4, iy * uy / 8,
@@ -294,12 +294,12 @@ unsafe fn create_dialog16(tmpl: u32, parent: u32, dlgproc: u32, param: u32) -> u
     }
     let target = if first_tab != 0 { first_tab } else { first };
     if user32::send(dlg, 0x110, target, param) != 0 && target != 0 {
-        user32::set_focus_hint(target); // WM_INITDIALOG devolveu TRUE: foco padrão
+        user32::set_focus_hint(target); // WM_INITDIALOG returned TRUE: default focus
     }
     dlg
 }
 
-// ---- tratadores ---------------------------------------------------------------------------
+// ---- handlers -----------------------------------------------------------------------------
 
 fn msgbox(c: &mut Call) -> u32 {
     unsafe { user32::MessageBoxA(c.w(0) as u32, c.ptr(1), c.ptr(2), c.w(3) as u32) as u32 }
@@ -314,7 +314,7 @@ fn kill_timer(c: &mut Call) -> u32 {
 }
 
 fn set_timer(c: &mut Call) -> u32 {
-    user32::SetTimer(c.w(0) as u32, c.w(1) as u32, c.w(2) as u32, c.l(3)) // procedimento far cru
+    user32::SetTimer(c.w(0) as u32, c.w(1) as u32, c.w(2) as u32, c.l(3)) // raw far procedure
 }
 
 fn set_focus(c: &mut Call) -> u32 {
@@ -525,7 +525,7 @@ fn offset_rect(c: &mut Call) -> u32 {
 fn pt_in_rect(c: &mut Call) -> u32 {
     let (p, pt) = (c.ptr(0), c.l(1));
     if p == 0 {
-        return 0; // o Civilization chega a passar um retângulo nulo
+        return 0; // Civilization actually passes a null rectangle
     }
     let r = unsafe { rect16(p) };
     let (x, y) = ((pt as u16 as i16) as i32, ((pt >> 16) as u16 as i16) as i32);
@@ -549,7 +549,7 @@ fn draw_text(c: &mut Call) -> u32 {
     let mut r = unsafe { rect16(p) };
     let h = unsafe { user32::DrawTextA(hdc, text as usize as *const u8, n, r.as_mut_ptr(), flags) };
     if flags & 0x400 != 0 {
-        unsafe { put_rect16(p, r) }; // DT_CALCRECT devolve o retângulo
+        unsafe { put_rect16(p, r) }; // DT_CALCRECT returns the rectangle
     }
     h as u32
 }
@@ -586,7 +586,7 @@ fn dispatch_message(c: &mut Call) -> u32 {
     let p = c.ptr(0);
     let (hwnd, msg, w, l, time) = unsafe { (rdu16(p) as u32, rdu16(p + 2) as u32, rdu16(p + 4), rd32(p + 6), rd32(p + 10)) };
     if msg == WM_TIMER && l != 0 {
-        // SetTimer com TIMERPROC: chama proc(hwnd, WM_TIMER, id, time)
+        // SetTimer with TIMERPROC: calls proc(hwnd, WM_TIMER, id, time)
         return trans_call(l, &[hwnd as u16, WM_TIMER as u16, w, (time >> 16) as u16, time as u16]);
     }
     if hwnd == 0 {
@@ -655,7 +655,7 @@ fn create_window16(c: &mut Call) -> u32 {
 fn create_dialog(c: &mut Call) -> u32 {
     let (name, parent, proc16) = (kernel_ext::key_of_far(c.l(1)), c.w(2) as u32, c.l(3));
     let Some(b) = kernel_ext::resource_bytes(&ResKey::Id(5), &name) else { return 0 };
-    // o modelo precisa de memória estável durante a criação
+    // the template needs stable memory during creation
     let Some(h) = kernel::global_alloc(b.len() as u32) else { return 0 };
     let (base, _) = kernel::global_info(h).unwrap();
     unsafe {
@@ -670,8 +670,8 @@ fn create_dialog_indirect(c: &mut Call) -> u32 {
     unsafe { create_dialog16(c.ptr(1), c.w(2) as u32, c.l(3), 0) }
 }
 
-/// IsDialogMessage(hDlg, lpMsg): se a mensagem é da caixa de diálogo ou de um filho, processa
-/// (despacha) e devolve TRUE; o programa então não deve despachá-la de novo.
+/// IsDialogMessage(hDlg, lpMsg): if the message belongs to the dialog box or a child, processes
+/// (dispatches) it and returns TRUE; the program must then not dispatch it again.
 fn is_dialog_message(c: &mut Call) -> u32 {
     let (dlg, p) = (c.w(0) as u32, c.ptr(1));
     let (hwnd, msg, w, l) = unsafe { (rdu16(p) as u32, rdu16(p + 2) as u32, rdu16(p + 4), rd32(p + 6)) };
@@ -704,7 +704,7 @@ fn modify_menu(c: &mut Call) -> u32 {
     unsafe { user32::ModifyMenuA(c.w(0) as u32, c.w(1) as u32, c.w(2) as u32, c.w(3) as u32, c.ptr(4)) as u32 }
 }
 
-/// Memória extra de janela (cbWndExtra) em palavras de 16 bits: um long ocupa duas palavras (idx e idx+2).
+/// Extra window memory (cbWndExtra) in 16-bit words: a long takes two words (idx and idx+2).
 fn extra_word(hwnd: u32, idx: i32) -> u32 {
     user32::GetWindowLongA(hwnd, idx) & 0xFFFF
 }
@@ -736,7 +736,7 @@ fn get_window_long(c: &mut Call) -> u32 {
 fn set_window_long(c: &mut Call) -> u32 {
     let (hwnd, idx, v) = (c.w(0) as u32, c.s(1) as i32, c.l(2));
     if idx == -4 {
-        return user32::set_wndproc(hwnd, v, true); // GWL_WNDPROC: novo procedimento far
+        return user32::set_wndproc(hwnd, v, true); // GWL_WNDPROC: new far procedure
     }
     if idx < 0 {
         return user32::SetWindowLongA(hwnd, idx, v);
@@ -763,13 +763,13 @@ fn load_accelerators(c: &mut Call) -> u32 {
     unsafe { std::ptr::copy_nonoverlapping(b.as_ptr(), base as usize as *mut u8, b.len()) };
     if std::env::var_os("WINLAYER_WIN16_TRACE").is_some() {
         for e in b.chunks_exact(5) {
-            eprintln!("[win16] acelerador: flags={:#04x} tecla={:#06x} comando={}", e[0], u16::from_le_bytes([e[1], e[2]]), u16::from_le_bytes([e[3], e[4]]));
+            eprintln!("[win16] accelerator: flags={:#04x} key={:#06x} command={}", e[0], u16::from_le_bytes([e[1], e[2]]), u16::from_le_bytes([e[3], e[4]]));
         }
     }
     h as u32
 }
 
-/// TranslateAccelerator(hwnd, haccel, lpmsg): entradas de 5 bytes (flags, tecla, comando).
+/// TranslateAccelerator(hwnd, haccel, lpmsg): 5-byte entries (flags, key, command).
 fn translate_accelerator(c: &mut Call) -> u32 {
     let (hwnd, h, p) = (c.w(0) as u32, c.w(1), c.ptr(2));
     let Some((base, size)) = kernel::global_info(h) else { return 0 };
@@ -874,7 +874,7 @@ pub static IMPLS: &[Impl] = &[
     Impl { module: "USER", name: "TRANSLATEACCELERATOR", sig: "wwp", f: translate_accelerator },
 ];
 
-/// Registra os ganchos do `user32` (chamar WndProc de 16 bits, carregar menus NE).
+/// Registers the `user32` hooks (calling 16-bit WndProc, loading NE menus).
 pub fn install_hooks() {
     user32::set_win16_hooks(call_proc16, load_menu16);
 }

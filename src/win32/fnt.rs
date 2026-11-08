@@ -1,4 +1,4 @@
-//! Fontes bitmap do Windows 2.x/3.x (formato FNT, dentro de arquivos `.FON` NE): leitura e desenho.
+//! Windows 2.x/3.x bitmap fonts (FNT format, inside NE `.FON` files): reading and drawing.
 
 use std::sync::{Arc, Mutex};
 
@@ -14,7 +14,7 @@ pub struct Fnt {
     first: u8,
     last: u8,
     default: u8,
-    /// (largura, deslocamento no arquivo) por caractere de `first` a `last`.
+    /// (width, file offset) per character from `first` to `last`.
     glyphs: Vec<(u16, u32)>,
     data: Vec<u8>,
 }
@@ -29,11 +29,11 @@ fn u32_at(d: &[u8], o: usize) -> Option<u32> {
     d.get(o..o + 4).map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
 }
 
-/// Interpreta um arquivo FNT (versões 0x200 e 0x300), bitmap proporcional ou fixo.
+/// Parses a FNT file (versions 0x200 and 0x300), proportional or fixed bitmap.
 fn parse_fnt(d: &[u8]) -> Option<Fnt> {
     let ver = u16_at(d, 0)?;
     if (d.len() < 118) || (ver != 0x200 && ver != 0x300) || u16_at(d, 66)? & 1 != 0 {
-        return None; // dfType bit 0 = vetorial
+        return None; // dfType bit 0 = vector
     }
     let (first, last, default) = (*d.get(95)?, *d.get(96)?, *d.get(97)?);
     let n = (last as usize + 1).checked_sub(first as usize)?;
@@ -66,7 +66,7 @@ fn parse_fnt(d: &[u8]) -> Option<Fnt> {
     })
 }
 
-/// Carrega todas as fontes (recurso RT_FONT = 8) de um módulo NE `.FON`; devolve quantas entraram.
+/// Loads all fonts (RT_FONT = 8 resource) of a NE `.FON` module; returns how many were added.
 pub fn load_fon(d: &[u8]) -> usize {
     let Some(h) = u32_at(d, 0x3C).map(|v| v as usize) else { return 0 };
     if d.get(h..h + 2) != Some(b"NE") {
@@ -107,8 +107,8 @@ fn add(f: Fnt) -> usize {
     1
 }
 
-/// Escolhe a fonte carregada com o nome dado e a altura de célula mais próxima de `want_h`
-/// (`want_h` < 0: altura de caractere, sem o espaçamento interno; 0: qualquer). Devolve índice+1.
+/// Picks the loaded font with the given name and the cell height closest to `want_h`
+/// (`want_h` < 0: character height, without internal leading; 0: any). Returns index+1.
 pub fn find(face: &str, want_h: i32) -> u32 {
     let all = FONTS.lock().unwrap();
     all.iter()
@@ -149,12 +149,12 @@ impl Fnt {
         s.iter().map(|&c| self.char_width(c)).sum()
     }
 
-    /// Desenha `s` com o canto superior esquerdo em (x, y); devolve a largura.
+    /// Draws `s` with the top-left corner at (x, y); returns the width.
     pub fn draw(&self, px: &mut [u32], bw: i32, bh: i32, x: i32, y: i32, s: &[u8], color: u32) -> i32 {
         let mut pen = x;
         for &c in s {
             let Some(&(w, off)) = self.glyphs.get(self.index(c)) else { continue };
-            // bitmap em colunas de 8 pixels: para cada coluna, `height` bytes de cima para baixo
+            // bitmap in 8-pixel columns: for each column, `height` bytes top to bottom
             for col in 0..(w as usize + 7) / 8 {
                 for row in 0..self.height as usize {
                     let Some(&byte) = self.data.get(off as usize + col * self.height as usize + row) else { continue };
