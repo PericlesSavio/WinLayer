@@ -1,0 +1,12 @@
+/target
+/CIVILIZATION
+/tests/*.exe
+/ISO-40BEST
+/out
+CIVWIN/
+prints/
+jogar.log
+jogar.sh
+.claude/
+tools/
+__pycache__/

@@ -1,0 +1,6 @@
+# O código do .exe é x86 de 32 bits: o loader também precisa ser 32 bits.
+# musl estático dispensa libc 32 bits do sistema (sem sudo).
+# i586 (sem SSE): o código do MSVC não alinha a pilha em 16 bytes, e o Rust com SSE
+# assume esse alinhamento (movaps), o que causa SIGSEGV dentro da std.
+[build]
+target = "i586-unknown-linux-musl"

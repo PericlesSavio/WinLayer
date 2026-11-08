@@ -1,0 +1,166 @@
+<!doctype html>
+<html lang="pt-br">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>winlayer</title>
+<style>
+  :root { color-scheme: dark; --bg: #1b1b1f; --fg: #d8d8de; --accent: #4cc2c2; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--fg); font: 14px system-ui, sans-serif; }
+  body { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; }
+  canvas { background: #008080; image-rendering: pixelated; outline: none; border: 1px solid #333; cursor: default; }
+  .bar { display: flex; gap: 14px; align-items: center; }
+  button { background: #2a2a31; color: var(--fg); border: 1px solid #444; padding: 3px 10px; cursor: pointer; }
+  #status { color: #8a8a94; min-width: 11em; }
+</style>
+</head>
+<body>
+<canvas id="c" width="640" height="480" tabindex="0"></canvas>
+<div class="bar">
+  <span id="status">conectando…</span>
+  <button id="scale">Escala: 1×</button>
+  <span>clique na tela para ativar teclado e som</span>
+</div>
+<script>
+let W = 640, H = 480;
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+const status = document.getElementById('status');
+let version = null;     // última versão de quadro recebida
+let queue = [];         // eventos de entrada pendentes (texto, uma linha cada)
+let move = null;        // último movimento do mouse (coalescido)
+let scale = 1;
+
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+// ---- quadros: long-poll, o servidor só responde quando algo mudou -------------------------
+async function frames() {
+  for (;;) {
+    try {
+      const r = await fetch('/frame?since=' + (version ?? 'x'), { cache: 'no-store' });
+      if (r.status === 204) continue;
+      version = r.headers.get('X-Version');
+      const nw = +r.headers.get('X-Width') || W, nh = +r.headers.get('X-Height') || H;
+      if (nw !== W || nh !== H) { W = nw; H = nh; canvas.width = W; canvas.height = H; canvas.style.width = (W * scale) + 'px'; canvas.style.height = (H * scale) + 'px'; }
+      const rgba = new Uint8ClampedArray(await r.arrayBuffer());
+      if (rgba.length === W * H * 4) ctx.putImageData(new ImageData(rgba, W, H), 0, 0);
+      status.textContent = 'quadro ' + version;
+    } catch (e) {
+      status.textContent = 'sem conexão';
+      await sleep(500);
+    }
+  }
+}
+
+// ---- entrada: agrupada a ~60 Hz num único POST ---------------------------------------------
+function flush() {
+  if (move) { queue.unshift('m ' + move[0] + ' ' + move[1]); move = null; }
+  if (!queue.length) return;
+  const body = queue.join('\n');
+  queue = [];
+  fetch('/event', { method: 'POST', body, keepalive: true }).catch(() => {});
+}
+setInterval(flush, 16);
+
+function pos(e) {
+  const r = canvas.getBoundingClientRect();
+  return [Math.max(0, Math.min(W - 1, Math.floor((e.clientX - r.left) * W / r.width))),
+          Math.max(0, Math.min(H - 1, Math.floor((e.clientY - r.top) * H / r.height)))];
+}
+canvas.addEventListener('mousemove', e => { move = pos(e); });
+canvas.addEventListener('mousedown', e => {
+  canvas.focus();
+  const p = pos(e); queue.push('m ' + p[0] + ' ' + p[1], 'd ' + e.button);
+  e.preventDefault();
+});
+window.addEventListener('mouseup', e => {
+  const p = pos(e); queue.push('m ' + p[0] + ' ' + p[1], 'u ' + e.button);
+});
+canvas.addEventListener('contextmenu', e => e.preventDefault());
+
+// keyCode do JS coincide com o código de tecla virtual (VK_*) do Windows para quase tudo.
+canvas.addEventListener('keydown', e => {
+  queue.push('kd ' + e.keyCode);
+  if (e.key.length === 1 && !e.ctrlKey && !e.altKey && !e.metaKey) queue.push('ch ' + e.key.charCodeAt(0));
+  else if (e.key === 'Enter') queue.push('ch 13');
+  else if (e.key === 'Backspace') queue.push('ch 8');
+  else if (e.key === 'Tab') queue.push('ch 9');
+  else if (e.key === 'Escape') queue.push('ch 27');
+  e.preventDefault();
+});
+canvas.addEventListener('keyup', e => { queue.push('ku ' + e.keyCode); e.preventDefault(); });
+
+document.getElementById('scale').onclick = ev => {
+  scale = scale === 1 ? 2 : 1;
+  canvas.style.width = (W * scale) + 'px';
+  canvas.style.height = (H * scale) + 'px';
+  ev.target.textContent = 'Escala: ' + scale + '×';
+  canvas.focus();
+};
+
+// ---- áudio: o winlayer publica eventos; aqui decodificamos o WAV e tocamos com Web Audio ------
+let actx = null;
+const decoded = new Map();      // id -> Promise<AudioBuffer>
+let sources = [];               // fontes em reprodução (para `stop`)
+let current = null;             // som "único" atual: sndPlaySound toca um por vez
+let streamAt = 0;               // instante em que o fluxo waveOut termina
+let aseq = 0;
+
+function ensureAudio() {
+  if (!actx) actx = new (window.AudioContext || window.webkitAudioContext)();
+  if (actx.state === 'suspended') actx.resume();
+}
+['pointerdown', 'keydown'].forEach(ev => canvas.addEventListener(ev, ensureAudio));
+
+function getBuffer(id) {
+  if (!decoded.has(id)) {
+    decoded.set(id, fetch('/sound?id=' + id).then(r => r.arrayBuffer()).then(b => actx.decodeAudioData(b)));
+  }
+  return decoded.get(id);
+}
+
+async function onAudio(op, id, mode) {
+  if (!actx || actx.state !== 'running') return;   // sem gesto do usuário ainda: ignora
+  if (op === 'stop') {
+    sources.forEach(s => { try { s.stop(); } catch (e) {} });
+    sources = []; streamAt = 0; current = null;
+    return;
+  }
+  let buf;
+  try { buf = await getBuffer(id); } catch (e) { return; }
+  const src = actx.createBufferSource();
+  src.buffer = buf;
+  src.loop = mode === 'loop';
+  src.connect(actx.destination);
+  let when = actx.currentTime;
+  if (mode === 'stream') { when = Math.max(actx.currentTime, streamAt); streamAt = when + buf.duration; }
+  if (mode !== 'stream') {      // um novo som interrompe o anterior (como no Windows)
+    if (current) { try { current.stop(); } catch (e) {} }
+    current = src;
+  }
+  src.start(when);
+  sources.push(src);
+  src.onended = () => { sources = sources.filter(s => s !== src); };
+}
+
+async function audioLoop() {
+  for (;;) {
+    try {
+      const r = await fetch('/audio?since=' + aseq, { cache: 'no-store' });
+      const text = await r.text();
+      aseq = +r.headers.get('X-Seq') || aseq;
+      for (const line of text.split('\n')) {
+        if (!line) continue;
+        const [, op, id, mode] = line.split('|');
+        onAudio(op, +id, mode);
+      }
+    } catch (e) { await sleep(500); }
+  }
+}
+
+canvas.focus();
+frames();
+audioLoop();
+</script>
+</body>
+</html>

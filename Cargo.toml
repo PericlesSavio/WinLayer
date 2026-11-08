@@ -1,0 +1,10 @@
+[package]
+name = "winlayer"
+version = "0.1.0"
+edition = "2021"
+description = "Compatibility layer that runs old Windows games on Linux"
+
+[dependencies]
+
+[profile.release]
+panic = "abort"
