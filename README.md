@@ -5,7 +5,7 @@ Windows: game code runs directly on the CPU, and calls to the Windows API are ha
 
 It ships as a single statically linked 32-bit executable of about 2.4 MB, with no libraries to install.
 
-**Version 0.0.3**, early development. It covers what the tested games use, not Windows as a whole. See
+**Version 0.0.4**, early development. It covers what the tested games use, not Windows as a whole. See
 [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md) for per-game results.
 
 ## Features
