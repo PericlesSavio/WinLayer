@@ -8,7 +8,7 @@ use std::sync::Mutex;
 
 /// DLLs whose functions are implemented in Rust (modules of `win32/`).
 /// `_inmm.dll` is GOG's "winmm" (emulates CD audio with OGG): it is treated as the internal winmm, without loading the DLL.
-const BUILTIN: [&str; 16] = ["msvcrt.dll", "imm32.dll", "wsock32.dll", "dinput.dll", "shell32.dll", "_inmm.dll", "kernel32.dll", "user32.dll", "gdi32.dll", "advapi32.dll", "ole32.dll", "oleaut32.dll", "comctl32.dll", "winmm.dll", "ddraw.dll", "dsound.dll"];
+const BUILTIN: [&str; 19] = ["dplayx.dll", "comdlg32.dll", "msvfw32.dll", "msvcrt.dll", "imm32.dll", "wsock32.dll", "dinput.dll", "shell32.dll", "_inmm.dll", "kernel32.dll", "user32.dll", "gdi32.dll", "advapi32.dll", "ole32.dll", "oleaut32.dll", "comctl32.dll", "winmm.dll", "ddraw.dll", "dsound.dll"];
 /// Fictitious HMODULEs of the builtins: BUILTIN_BASE + index * 0x10000.
 const BUILTIN_BASE: u32 = 0x7800_0000;
 

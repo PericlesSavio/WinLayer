@@ -8,6 +8,8 @@
 use std::sync::OnceLock;
 
 const DP_OK: u32 = 0;
+/// MAKE_DPHRESULT(90) — no service provider available
+const DPERR_UNAVAILABLE: u32 = 0x8877_005A;
 const E_NOINTERFACE: u32 = 0x8000_4002;
 const DPERR_UNSUPPORTED: u32 = 0x8000_4001;
 /// MAKE_DPHRESULT(1070)
@@ -29,6 +31,31 @@ macro_rules! vtable {
         static V: OnceLock<Vec<u32>> = OnceLock::new();
         V.get_or_init(|| vec![$($f as *const () as usize as u32),*]).as_slice()
     }};
+}
+
+pub fn resolve(name: &str) -> Option<usize> {
+    exports!(name, DirectPlayCreate, DirectPlayEnumerateA)
+}
+
+/// Games link dplayx.dll by ordinal.
+pub fn name_of(ordinal: u32) -> Option<&'static str> {
+    match ordinal {
+        1 => Some("DirectPlayCreate"),
+        2 => Some("DirectPlayEnumerateA"),
+        _ => None,
+    }
+}
+
+/// No service provider exists, so the object is never created.
+#[allow(non_snake_case)]
+extern "stdcall" fn DirectPlayCreate(_guid: u32, _out: u32, _outer: u32) -> u32 {
+    DPERR_UNAVAILABLE
+}
+
+/// Lists zero service providers.
+#[allow(non_snake_case)]
+extern "stdcall" fn DirectPlayEnumerateA(_callback: u32, _context: u32) -> u32 {
+    DP_OK
 }
 
 /// Creates the lobby object (IDirectPlayLobbyA/2A/3A: the version 3 vtable contains the earlier ones).

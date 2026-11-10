@@ -81,7 +81,8 @@ pub fn map(pe: &Pe32, file: &[u8]) -> Result<u32, LoadError> {
 
     let hdr = (pe.size_of_headers as usize).min(file.len());
     unsafe { std::ptr::copy_nonoverlapping(file.as_ptr(), base, hdr) };
-    for s in &pe.sections {
+    // A raw offset of 0 means the section has no file data (uninitialized), even if a raw size is declared.
+    for s in pe.sections.iter().filter(|s| s.raw_offset != 0) {
         let n = (s.raw_size as usize).min(file.len().saturating_sub(s.raw_offset as usize));
         unsafe {
             std::ptr::copy_nonoverlapping(file.as_ptr().add(s.raw_offset as usize), base.add(s.virtual_address as usize), n);

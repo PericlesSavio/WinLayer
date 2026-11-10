@@ -101,6 +101,14 @@ pub fn tick_virtual(ms: u32) {
     }
 }
 
+/// A presented DirectDraw frame also counts as one script `wait` frame: games that poll the
+/// input every frame may never leave the message queue empty, so `idle` alone would not advance the script.
+pub fn frame_wait() {
+    if shot_mode() {
+        take_wait();
+    }
+}
+
 pub(super) fn advance_virtual(ms: u32) {
     VNOW.fetch_add(ms, Ordering::Relaxed);
 }
@@ -915,6 +923,8 @@ extern "stdcall" fn GetKeyState(vk: i32) -> i16 {
 
 #[allow(non_snake_case)]
 extern "stdcall" fn GetAsyncKeyState(vk: i32) -> i16 {
+    // Unlike GetKeyState this reflects the hardware right now: games spin on it waiting for a key to be released.
+    pump();
     GetKeyState(vk)
 }
 

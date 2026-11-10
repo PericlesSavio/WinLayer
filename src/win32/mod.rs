@@ -64,7 +64,8 @@ pub unsafe fn call4(f: u32, a: u32, b: u32, c: u32, d: u32) -> u32 {
 
 /// Name of the function exported by ordinal (builtin DLLs imported by number).
 pub fn ordinal_name(dll: &str, ordinal: u32) -> Option<&'static str> {
-    match dll {
+    match dll.to_ascii_lowercase().as_str() {
+        "dplayx.dll" => dplay::name_of(ordinal),
         "oleaut32.dll" => oleaut32::name_of(ordinal),
         "wsock32.dll" => wsock32::name_of(ordinal),
         "dsound.dll" if ordinal == 1 => Some("DirectSoundCreate"),
@@ -95,6 +96,9 @@ pub fn resolve(dll: &str, name: &str) -> Option<usize> {
         "dinput.dll" => dinput::resolve(name),
         "dsound.dll" => dsound::resolve(name),
         "oleaut32.dll" => oleaut32::resolve(name),
+        "dplayx.dll" => dplay::resolve(name),
+        "comdlg32.dll" => stubs::resolve_comdlg32(name),
+        "msvfw32.dll" => stubs::resolve_msvfw32(name),
         _ => None,
     }
 }

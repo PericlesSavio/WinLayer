@@ -9,6 +9,7 @@ pub fn resolve(name: &str) -> Option<usize> {
         SetLastError, GetCommandLineW, GetEnvironmentStringsW, GetStringTypeA, GetStringTypeW,
         LCMapStringA, LCMapStringW, CompareStringA, CompareStringW, GetVersionExA, GetSystemDirectoryA,
         GetSystemTime, VirtualQuery, LoadLibraryExA, LoadLibraryW, VirtualProtect, MulDiv, _lread, _lwrite, _llseek, _lclose,
+        _hwrite, _lcreat, GlobalCompact, GetComputerNameA,
     )
     .or_else(|| super::stubs::resolve_kernel32(name))
 }
@@ -276,6 +277,41 @@ unsafe extern "stdcall" fn _lread(h: u32, buf: *mut u8, n: u32) -> u32 {
 unsafe extern "stdcall" fn _lwrite(h: u32, buf: *const u8, n: u32) -> u32 {
     let mut done = 0u32;
     if super::kernel32::write_file_raw(h as usize, buf, n, &mut done) != 0 { done } else { u32::MAX }
+}
+
+#[allow(non_snake_case)]
+unsafe extern "stdcall" fn _hwrite(h: u32, buf: *const u8, n: u32) -> u32 {
+    _lwrite(h, buf, n)
+}
+
+/// Creates or truncates the file, opened for reading and writing; the attributes are ignored.
+#[allow(non_snake_case)]
+unsafe extern "stdcall" fn _lcreat(name: *const i8, _attributes: u32) -> i32 {
+    const GENERIC_READ_WRITE: u32 = 0xC000_0000;
+    const SHARE_READ_WRITE: u32 = 3;
+    const CREATE_ALWAYS: u32 = 2;
+    let h = super::files::CreateFileA(name, GENERIC_READ_WRITE, SHARE_READ_WRITE, 0, CREATE_ALWAYS, 0, 0);
+    if h == u32::MAX { -1 } else { h as i32 }
+}
+
+/// Memory is never moved here: reports a large free block, as a machine with plenty of RAM would.
+#[allow(non_snake_case)]
+extern "stdcall" fn GlobalCompact(_min_free: u32) -> u32 {
+    0x0400_0000
+}
+
+#[allow(non_snake_case)]
+unsafe extern "stdcall" fn GetComputerNameA(buf: *mut u8, size: *mut u32) -> i32 {
+    let name = b"WINLAYER\0";
+    if buf.is_null() || size.is_null() || (*size as usize) < name.len() {
+        if !size.is_null() {
+            *size = name.len() as u32;
+        }
+        return 0;
+    }
+    std::ptr::copy_nonoverlapping(name.as_ptr(), buf, name.len());
+    *size = name.len() as u32 - 1;
+    1
 }
 
 #[allow(non_snake_case)]

@@ -1,6 +1,6 @@
 # Compatibility
 
-Windows games tested with winlayer 0.0.3. Last updated: 2026-11-08.
+Windows games tested with winlayer 0.0.3. Last updated: 2026-11-09.
 
 ## Summary
 
@@ -8,9 +8,9 @@ Windows games tested with winlayer 0.0.3. Last updated: 2026-11-08.
 |---|---|---:|
 | **Doesn't run** | Crashes or exits before showing the game | 1 |
 | **Unplayable** | Starts, but something essential prevents playing | 2 |
-| **Playable** | Can be played, but features are missing or there are visible defects | 3 |
+| **Playable** | Can be played, but features are missing or there are visible defects | 4 |
 | **Perfect** | No known defects, after extended testing | 0 |
-| **Total** | | **6** |
+| **Total** | | **7** |
 
 No game is rated Perfect yet: more testing is needed.
 
@@ -21,6 +21,7 @@ No game is rated Perfect yet: more testing is needed.
 | [Revenant](#revenant) (GOG 1.22l) | 1999 | Win32, DirectX 6 | Playable: no CD music, no multiplayer | DirectDraw 640x480x16, game's own 3D renderer | See notes | DirectInput and window messages |
 | [Nox](#nox) | 2000 | Win32, DirectX | Playable: no multiplayer | DirectDraw 640x480x16 | DirectSound | DirectInput |
 | [Hexplore](#hexplore) | 1998 | Win32, DirectX 5 | Playable | DirectDraw 640x480x8 | DirectSound | Mouse and keyboard |
+| [Rising Lands](#rising-lands) (Portuguese) | 1997 | Win32, DirectX | Playable: no AVI videos, no multiplayer | DirectDraw 800x600 | Not verified | Mouse and keyboard |
 | [3D Pinball: Space Cadet](#3d-pinball-space-cadet) | 1995 | Win32, GDI | Unplayable | GDI, 8-bit palette | Not verified | Keyboard |
 | [Civilization for Windows](#civilization-for-windows) | 1992 | Win16 (NE) | Unplayable: units do not move | GDI | `sndPlaySound` | Mouse and keyboard |
 | [Planescape: Torment Enhanced Edition](#planescape-torment-enhanced-edition) (GOG 3.1.4.0) | 2017 | Win32, OpenGL | Doesn't run: native version available | — | — | — |
@@ -60,6 +61,19 @@ No game is rated Perfect yet: more testing is needed.
 - **Game controls:** F2 starts a game and Space launches the ball.
 - **Limitations:** unplayable in a real window, cause not yet identified. Sound not verified. The game creates a
   fixed-size window.
+
+## Rising Lands
+
+- **Command**, from the game folder: `winlayer Rising.EXE`
+- **Tested:** menus, loading a saved game and selecting units in capture mode; playing in an X11 window.
+- **Fixed for this game:** sections with uninitialized data declared with a file size are no longer filled from the
+  file; `GetAsyncKeyState` now processes pending input, so loops that wait for a key to be released no longer freeze;
+  INI files are now read (the game's unit rules, names and inventions come from `RISING.INI`), which brought back the
+  options of units.
+- **Limitations:**
+  - AVI videos (`MCIWndCreateA`) are not played and there is no file dialog (`GetOpenFileNameA`).
+  - Writing INI files has no effect.
+  - Multiplayer does not work: DirectPlay has no service providers.
 
 ## Civilization for Windows
 

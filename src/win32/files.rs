@@ -259,18 +259,144 @@ unsafe extern "stdcall" fn GetTempPathA(max: u32, buf: *mut u8) -> u32 {
     put_cstr(buf, max, b"C:\\TEMP\\")
 }
 
-// INI: no real reading/writing yet; returns the default value.
-#[allow(non_snake_case)]
-unsafe extern "stdcall" fn GetPrivateProfileIntA(_sec: u32, _key: u32, default: i32, _file: u32) -> i32 {
-    default
+// ---- INI files (read only) ----------------------------------------------------------------
+
+/// A bare file name lives in the Windows directory; anything with a path goes through the usual mapping.
+unsafe fn ini_path(file: *const i8) -> Option<PathBuf> {
+    if file.is_null() {
+        return None;
+    }
+    let name = std::ffi::CStr::from_ptr(file).to_string_lossy().into_owned();
+    if name.contains(['\\', '/', ':']) {
+        Some(host_path(&name))
+    } else {
+        Some(host_path(&format!("C:\\WINDOWS\\{name}")))
+    }
+}
+
+/// Sections in file order, each with its `key=value` pairs. Names keep their case; lookups ignore it.
+/// Lines starting with `;` are comments; keys and values are trimmed and a value in double quotes loses them.
+fn parse_ini(text: &[u8]) -> Vec<(Vec<u8>, Vec<(Vec<u8>, Vec<u8>)>)> {
+    let mut out: Vec<(Vec<u8>, Vec<(Vec<u8>, Vec<u8>)>)> = Vec::new();
+    for line in text.split(|&c| c == b'\n') {
+        let line = line.trim_ascii();
+        if line.is_empty() || line[0] == b';' {
+            continue;
+        }
+        if line[0] == b'[' {
+            let end = line.iter().position(|&c| c == b']').unwrap_or(line.len());
+            out.push((line[1..end].trim_ascii().to_vec(), Vec::new()));
+            continue;
+        }
+        let Some(section) = out.last_mut() else { continue };
+        let (key, value) = match line.iter().position(|&c| c == b'=') {
+            Some(i) => (line[..i].trim_ascii(), line[i + 1..].trim_ascii()),
+            None => (line, &b""[..]),
+        };
+        let value = match value {
+            [b'"', inner @ .., b'"'] => inner,
+            v => v,
+        };
+        section.1.push((key.to_vec(), value.to_vec()));
+    }
+    out
+}
+
+/// The value of `section`/`key` in the INI file, if both exist.
+unsafe fn ini_lookup(sec: *const i8, key: *const i8, file: *const i8) -> Option<Vec<u8>> {
+    let text = std::fs::read(ini_path(file)?).ok()?;
+    let sec = std::ffi::CStr::from_ptr(sec).to_bytes();
+    let key = std::ffi::CStr::from_ptr(key).to_bytes();
+    parse_ini(&text)
+        .into_iter()
+        .filter(|(name, _)| name.eq_ignore_ascii_case(sec))
+        .flat_map(|(_, pairs)| pairs)
+        .find(|(k, _)| k.eq_ignore_ascii_case(key))
+        .map(|(_, v)| v)
+}
+
+/// Leading decimal number (or `0x` hexadecimal), as Windows reads it; text that is not a number gives 0.
+fn ini_int(v: &[u8]) -> i32 {
+    let (neg, digits) = match v {
+        [b'-', rest @ ..] => (true, rest),
+        [b'+', rest @ ..] => (false, rest),
+        _ => (false, v),
+    };
+    let (radix, digits) = match digits {
+        [b'0', b'x' | b'X', rest @ ..] => (16, rest),
+        _ => (10, digits),
+    };
+    let mut n: i32 = 0;
+    for &c in digits {
+        let Some(d) = (c as char).to_digit(radix) else { break };
+        n = n.wrapping_mul(radix as i32).wrapping_add(d as i32);
+    }
+    if neg { n.wrapping_neg() } else { n }
 }
 
 #[allow(non_snake_case)]
-unsafe extern "stdcall" fn GetPrivateProfileStringA(_sec: u32, _key: u32, default: *const i8, buf: *mut u8, max: u32, _file: u32) -> u32 {
-    let d = if default.is_null() { &[][..] } else { std::ffi::CStr::from_ptr(default).to_bytes() };
-    put_cstr(buf, max, d)
+unsafe extern "stdcall" fn GetPrivateProfileIntA(sec: *const i8, key: *const i8, default: i32, file: *const i8) -> i32 {
+    if sec.is_null() || key.is_null() {
+        return default;
+    }
+    match ini_lookup(sec, key, file) {
+        Some(v) if !v.is_empty() => ini_int(&v),
+        _ => default,
+    }
 }
 
+/// Copies a list of names separated by NUL and ending in a double NUL; returns the length without the final NUL.
+unsafe fn put_list(buf: *mut u8, max: u32, names: &[Vec<u8>]) -> u32 {
+    if buf.is_null() || max < 2 {
+        return 0;
+    }
+    let mut data: Vec<u8> = Vec::new();
+    for n in names {
+        data.extend_from_slice(n);
+        data.push(0);
+    }
+    let room = max as usize - 1; // space before the final NUL
+    if data.len() > room {
+        data.truncate(room - 1);
+        data.push(0);
+        std::ptr::copy_nonoverlapping(data.as_ptr(), buf, data.len());
+        *buf.add(data.len()) = 0;
+        return max - 2;
+    }
+    std::ptr::copy_nonoverlapping(data.as_ptr(), buf, data.len());
+    *buf.add(data.len()) = 0;
+    data.len() as u32
+}
+
+/// With a null section, lists the section names; with a null key, the keys of the section.
+#[allow(non_snake_case)]
+unsafe extern "stdcall" fn GetPrivateProfileStringA(
+    sec: *const i8,
+    key: *const i8,
+    default: *const i8,
+    buf: *mut u8,
+    max: u32,
+    file: *const i8,
+) -> u32 {
+    if sec.is_null() || key.is_null() {
+        let text = ini_path(file).and_then(|p| std::fs::read(p).ok()).unwrap_or_default();
+        let ini = parse_ini(&text);
+        let names: Vec<Vec<u8>> = if sec.is_null() {
+            ini.into_iter().map(|(name, _)| name).collect()
+        } else {
+            let sec = std::ffi::CStr::from_ptr(sec).to_bytes();
+            ini.into_iter().filter(|(name, _)| name.eq_ignore_ascii_case(sec)).flat_map(|(_, pairs)| pairs.into_iter().map(|(k, _)| k)).collect()
+        };
+        return put_list(buf, max, &names);
+    }
+    let value = ini_lookup(sec, key, file).unwrap_or_else(|| {
+        let d = if default.is_null() { &[][..] } else { std::ffi::CStr::from_ptr(default).to_bytes() };
+        d.trim_ascii_end().to_vec()
+    });
+    put_cstr(buf, max, &value)
+}
+
+/// Writing is not implemented: the file is left untouched.
 #[allow(non_snake_case)]
 extern "stdcall" fn WritePrivateProfileStringA(_sec: u32, _key: u32, _val: u32, _file: u32) -> i32 {
     1
@@ -533,5 +659,37 @@ extern "stdcall" fn UnmapViewOfFile(addr: u32) -> i32 {
             1
         }
         None => 0,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ini_sections_keys_and_comments() {
+        let ini = parse_ini(b"; comment\r\n[MINE]\r\nDEGAT=100,90\r\n\r\n[Soldat]\r\n RAYON = 7 \r\nNOM=\"Soldat 1\"\r\n");
+        assert_eq!(ini.len(), 2);
+        assert_eq!(ini[1].0, b"Soldat");
+        assert_eq!(ini[1].1[0], (b"RAYON".to_vec(), b"7".to_vec()));
+        assert_eq!(ini[1].1[1].1, b"Soldat 1");
+        assert_eq!(ini[0].1[0].1, b"100,90");
+    }
+
+    #[test]
+    fn ini_int_reads_leading_number() {
+        assert_eq!(ini_int(b"3000"), 3000);
+        assert_eq!(ini_int(b"-12abc"), -12);
+        assert_eq!(ini_int(b"0x1F"), 31);
+        assert_eq!(ini_int(b"100,90"), 100);
+        assert_eq!(ini_int(b"abc"), 0);
+    }
+
+    #[test]
+    fn ini_list_is_double_nul_terminated() {
+        let mut b = [0xAAu8; 16];
+        let n = unsafe { put_list(b.as_mut_ptr(), 16, &[b"A".to_vec(), b"BC".to_vec()]) };
+        assert_eq!(n, 5);
+        assert_eq!(&b[..6], b"A\0BC\0\0");
     }
 }

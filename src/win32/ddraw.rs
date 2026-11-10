@@ -1161,6 +1161,7 @@ fn present() {
 /// and save the PNG (a DirectDraw game is never idle).
 fn frame_done() {
     let n = FRAMES.fetch_add(1, Ordering::Relaxed) + 1;
+    user32::frame_wait();
     if user32::shot_mode() {
         let max: u32 = std::env::var("WINLAYER_DDRAW_FRAMES").ok().and_then(|v| v.parse().ok()).unwrap_or(300);
         if n >= max {

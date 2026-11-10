@@ -2,7 +2,7 @@
 //! client area; `gdi32` draws on it and `dump_screenshot` generates a PNG.
 
 mod input;
-pub use input::{default_scan, tick_virtual, real_ms, input_key_down, GetCursorPos, KillTimer, ReleaseCapture, SetCapture, SetFocus, SetTimer, frame_version, now_ms, push_events, render_bgrx, render_rgba, set_shot_mode, shot_mode, touch};
+pub use input::{default_scan, frame_wait, tick_virtual, real_ms, input_key_down, GetCursorPos, KillTimer, ReleaseCapture, SetCapture, SetFocus, SetTimer, frame_version, now_ms, push_events, render_bgrx, render_rgba, set_shot_mode, shot_mode, touch};
 
 use super::draw::{self, Buf};
 use super::{call4, fnt, gdi32, listbox, menu, resources, text};

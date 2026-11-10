@@ -1634,6 +1634,29 @@ pub extern "stdcall" fn ImmSetCompositionWindow(_h: u32, _c: u32) -> i32 { 0 }
 #[allow(non_snake_case)]
 pub extern "stdcall" fn ImmSetOpenStatus(_h: u32, _o: i32) -> i32 { 0 }
 
+pub fn resolve_comdlg32(name: &str) -> Option<usize> {
+    exports!(name, GetOpenFileNameA)
+}
+
+pub fn resolve_msvfw32(name: &str) -> Option<usize> {
+    exports!(name, MCIWndCreateA)
+}
+
+/// There is no file dialog: answers as if the user had cancelled it.
+#[allow(non_snake_case)]
+extern "stdcall" fn GetOpenFileNameA(_ofn: u32) -> i32 {
+    eprintln!("[winlayer] GetOpenFileNameA: no file dialog, reporting cancel");
+    0
+}
+
+/// There is no MCI video window: creation fails (a null HWND), so the video is not played.
+#[allow(non_snake_case)]
+unsafe extern "C" fn MCIWndCreateA(_parent: u32, _instance: u32, _style: u32, file: *const i8) -> u32 {
+    let file = if file.is_null() { "".into() } else { std::ffi::CStr::from_ptr(file).to_string_lossy() };
+    eprintln!("[winlayer] MCIWndCreateA: video not supported ({file})");
+    0
+}
+
 pub fn resolve_imm32(name: &str) -> Option<usize> {
     exports!(name, ImmCreateContext, ImmDestroyContext, ImmGetCandidateListA, ImmGetCompositionStringA, ImmGetContext, ImmGetDescriptionA, ImmGetOpenStatus, ImmGetProperty, ImmNotifyIME, ImmReleaseContext, ImmSetCompositionStringA, ImmSetCompositionWindow, ImmSetOpenStatus)
 }
