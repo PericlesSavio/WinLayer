@@ -352,6 +352,7 @@ unsafe extern "stdcall" fn dd_qi(_this: u32, riid: u32, out: *mut u32) -> u32 {
         other => {
             if trace() {
                 eprintln!("[ddraw] QueryInterface: interface {other:#010x} not supported");
+                crate::diag::note(crate::diag::Kind::Unsupported, format!("IDirectDraw::QueryInterface {other:#010x}"));
             }
             if !out.is_null() {
                 *out = 0;
@@ -751,6 +752,7 @@ unsafe extern "stdcall" fn sf_qi(this: u32, riid: u32, out: *mut u32) -> u32 {
         other => {
             if trace() {
                 eprintln!("[ddraw] Surface::QueryInterface: {other:#010x} not supported");
+                crate::diag::note(crate::diag::Kind::Unsupported, format!("IDirectDrawSurface::QueryInterface {other:#010x}"));
             }
             *out = 0;
             E_NOINTERFACE
@@ -1135,6 +1137,11 @@ fn present() {
         let Some(p) = s.surfaces.get(&s.primary) else { return };
         (s.hwnd, p.w, p.h, to_rgb(&s, p))
     };
+    if trace() {
+        let lit = px.iter().filter(|&&c| c & 0xFFFFFF != 0).count();
+        let (ox, oy) = user32::client_screen_origin(hwnd);
+        eprintln!("[ddraw] present hwnd={hwnd:#x} origin=({ox},{oy}) lit={lit}");
+    }
     if hwnd == 0 {
         return;
     }
@@ -1168,6 +1175,7 @@ fn frame_done() {
             if let Ok(path) = std::env::var("WINLAYER_SHOT") {
                 user32::dump_screenshot(&path);
             }
+            crate::diag::set_end(format!("capture finished after {n} frames"));
             super::kernel32::exit_process(0);
         }
     }

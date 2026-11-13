@@ -345,6 +345,7 @@ unsafe extern "stdcall" fn ds_create_buffer(_this: u32, desc: u32, out: *mut u32
         let Some(fmt) = fmt else {
             if trace() {
                 eprintln!("[dsound] CreateSoundBuffer: format not supported");
+                crate::diag::note(crate::diag::Kind::Unsupported, "IDirectSound::CreateSoundBuffer: format not supported");
             }
             return DSERR_BADFORMAT;
         };

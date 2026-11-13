@@ -18,7 +18,7 @@ pub fn resolve(name: &str) -> Option<usize> {
         midiOutPrepareHeader, midiOutUnprepareHeader, midiOutGetNumDevs, auxGetNumDevs, auxGetDevCapsA, auxGetVolume,
         auxSetVolume, mixerGetNumDevs, mixerOpen, mixerClose, mixerGetLineInfoA, mixerGetLineControlsA,
         mixerGetControlDetailsA, mixerSetControlDetails, waveInOpen, waveInClose, waveInAddBuffer, waveInPrepareHeader,
-        waveInUnprepareHeader, waveInReset, waveInStart, waveInGetNumDevs, mmioOpenA, mmioAscend, mmioDescend, mmioRead, mmioClose,
+        waveInUnprepareHeader, waveInReset, waveInStart, waveInGetNumDevs, mmioOpenA, mmioAscend, mmioDescend, mmioRead, mmioClose, mmioSeek, mmioGetInfo, mmioSetInfo, mmioSetBuffer, mmioAdvance,
     )
 }
 
@@ -335,15 +335,31 @@ fn fire_timers() {
     }
 }
 
-// ---- MCI, joystick, MIDI, mmio: unsupported (return error/"no device") ------------------------
+// ---- MCI, joystick, MIDI: unsupported (return error/"no device") ------------------------
 
 #[allow(non_snake_case)]
-extern "stdcall" fn mciSendCommandA(_dev: u32, _msg: u32, _flags: u32, _param: u32) -> u32 {
+extern "stdcall" fn mciSendCommandA(_dev: u32, msg: u32, _flags: u32, _param: u32) -> u32 {
+    let name = match msg {
+        0x803 => "MCI_OPEN",
+        0x804 => "MCI_CLOSE",
+        0x806 => "MCI_PLAY",
+        0x807 => "MCI_SEEK",
+        0x808 => "MCI_STOP",
+        0x809 => "MCI_PAUSE",
+        0x80D => "MCI_SET",
+        0x814 => "MCI_STATUS",
+        _ => "",
+    };
+    crate::diag::note(crate::diag::Kind::Unsupported, format!("MCI command {msg:#x} {name} (mciSendCommandA)"));
     263 // MCIERR_UNSUPPORTED_FUNCTION
 }
 
 #[allow(non_snake_case)]
-extern "stdcall" fn mciSendStringA(_cmd: u32, _ret: u32, _cch: u32, _hwnd: u32) -> u32 {
+unsafe extern "stdcall" fn mciSendStringA(cmd: *const i8, _ret: u32, _cch: u32, _hwnd: u32) -> u32 {
+    if !cmd.is_null() {
+        let c = std::ffi::CStr::from_ptr(cmd).to_string_lossy();
+        crate::diag::note(crate::diag::Kind::Unsupported, format!("MCI: \"{c}\" (mciSendStringA)"));
+    }
     263
 }
 
@@ -398,29 +414,150 @@ extern "stdcall" fn midiOutLongMsg(_h: u32, _hdr: u32, _size: u32) -> u32 {
     0
 }
 
+// ---- mmio: read-only RIFF files (WAV loading) ---------------------------------------------
+
+/// An open mmio file: read whole into memory (the files games read this way are small).
+struct MmioFile {
+    data: Vec<u8>,
+    pos: usize,
+}
+
+static MMIO: Mutex<BTreeMap<u32, MmioFile>> = Mutex::new(BTreeMap::new());
+static MMIO_NEXT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0x6000);
+
+const MMIO_WRITE: u32 = 0x1;
+const MMIO_READWRITE: u32 = 0x2;
+const MMIO_CREATE: u32 = 0x1000;
+const MMIO_EXIST: u32 = 0x4000;
+const MMIO_FINDCHUNK: u32 = 0x10;
+const MMIO_FINDRIFF: u32 = 0x20;
+const MMIO_FINDLIST: u32 = 0x40;
+const MMIOERR_CHUNKNOTFOUND: u32 = 265;
+const FOURCC_RIFF: u32 = u32::from_le_bytes(*b"RIFF");
+const FOURCC_LIST: u32 = u32::from_le_bytes(*b"LIST");
+
+fn rd32(d: &[u8], o: usize) -> Option<u32> {
+    d.get(o..o + 4).map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+}
+
+/// Only reading named files is supported: writing, memory files and custom I/O procedures fail.
 #[allow(non_snake_case)]
-extern "stdcall" fn mmioOpenA(_name: u32, _info: u32, _flags: u32) -> u32 {
-    0 // open failure
+unsafe extern "stdcall" fn mmioOpenA(name: *const i8, _info: u32, flags: u32) -> u32 {
+    if name.is_null() {
+        return 0;
+    }
+    let win = std::ffi::CStr::from_ptr(name).to_string_lossy().into_owned();
+    let path = super::files::host_path(&win);
+    if flags & MMIO_EXIST != 0 {
+        return path.is_file() as u32;
+    }
+    if flags & (MMIO_WRITE | MMIO_READWRITE | MMIO_CREATE) != 0 {
+        return 0;
+    }
+    let Ok(data) = std::fs::read(&path) else {
+        crate::diag::note(crate::diag::Kind::FileNotFound, format!("{win} -> {} (mmioOpen)", path.display()));
+        return 0;
+    };
+    let h = MMIO_NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    MMIO.lock().unwrap().insert(h, MmioFile { data, pos: 0 });
+    h
 }
 
 #[allow(non_snake_case)]
-extern "stdcall" fn mmioAscend(_h: u32, _ck: u32, _flags: u32) -> u32 {
-    264 // MMIOERR_CHUNKNOTFOUND
+extern "stdcall" fn mmioClose(h: u32, _flags: u32) -> u32 {
+    if MMIO.lock().unwrap().remove(&h).is_some() { 0 } else { 5 } // MMSYSERR_INVALHANDLE
 }
 
 #[allow(non_snake_case)]
-extern "stdcall" fn mmioDescend(_h: u32, _ck: u32, _parent: u32, _flags: u32) -> u32 {
-    264
+unsafe extern "stdcall" fn mmioRead(h: u32, buf: *mut u8, n: i32) -> i32 {
+    let mut files = MMIO.lock().unwrap();
+    let Some(f) = files.get_mut(&h) else { return -1 };
+    let n = (n.max(0) as usize).min(f.data.len().saturating_sub(f.pos));
+    std::ptr::copy_nonoverlapping(f.data.as_ptr().add(f.pos), buf, n);
+    f.pos += n;
+    n as i32
 }
 
 #[allow(non_snake_case)]
-extern "stdcall" fn mmioRead(_h: u32, _buf: u32, _n: u32) -> u32 {
-    u32::MAX
+extern "stdcall" fn mmioSeek(h: u32, off: i32, origin: i32) -> i32 {
+    let mut files = MMIO.lock().unwrap();
+    let Some(f) = files.get_mut(&h) else { return -1 };
+    let base = match origin {
+        0 => 0,
+        1 => f.pos as i64,
+        2 => f.data.len() as i64,
+        _ => return -1,
+    };
+    let new = base + off as i64;
+    if new < 0 {
+        return -1;
+    }
+    f.pos = new as usize;
+    new as i32
+}
+
+/// MMCKINFO: ckid, cksize, fccType, dwDataOffset, dwFlags.
+#[allow(non_snake_case)]
+unsafe extern "stdcall" fn mmioDescend(h: u32, ck: *mut u32, parent: *const u32, flags: u32) -> u32 {
+    let mut files = MMIO.lock().unwrap();
+    let Some(f) = files.get_mut(&h) else { return 5 };
+    let end = if parent.is_null() { f.data.len() } else { (*parent.add(3) + *parent.add(1)) as usize }.min(f.data.len());
+    let (want_id, want_type) = (*ck, *ck.add(2));
+    let mut pos = f.pos;
+    loop {
+        let (Some(id), Some(size)) = (rd32(&f.data, pos), rd32(&f.data, pos + 4)) else { return MMIOERR_CHUNKNOTFOUND };
+        if pos + 8 > end {
+            return MMIOERR_CHUNKNOTFOUND;
+        }
+        let container = id == FOURCC_RIFF || id == FOURCC_LIST;
+        let ftype = if container { rd32(&f.data, pos + 8).unwrap_or(0) } else { 0 };
+        let found = match flags & (MMIO_FINDCHUNK | MMIO_FINDRIFF | MMIO_FINDLIST) {
+            MMIO_FINDCHUNK => id == want_id,
+            MMIO_FINDRIFF => id == FOURCC_RIFF && ftype == want_type,
+            MMIO_FINDLIST => id == FOURCC_LIST && ftype == want_type,
+            _ => true,
+        };
+        if found {
+            *ck = id;
+            *ck.add(1) = size;
+            *ck.add(2) = ftype;
+            *ck.add(3) = (pos + 8) as u32;
+            *ck.add(4) = 0;
+            f.pos = pos + 8 + if container { 4 } else { 0 };
+            return 0;
+        }
+        pos += 8 + size as usize + (size & 1) as usize;
+    }
 }
 
 #[allow(non_snake_case)]
-extern "stdcall" fn mmioClose(_h: u32, _flags: u32) -> u32 {
+unsafe extern "stdcall" fn mmioAscend(h: u32, ck: *const u32, _flags: u32) -> u32 {
+    let mut files = MMIO.lock().unwrap();
+    let Some(f) = files.get_mut(&h) else { return 5 };
+    let size = *ck.add(1);
+    f.pos = (*ck.add(3) + size + (size & 1)) as usize;
     0
+}
+
+/// Direct access to the I/O buffer is not supported.
+#[allow(non_snake_case)]
+extern "stdcall" fn mmioGetInfo(_h: u32, _info: u32, _flags: u32) -> u32 {
+    5 // MMSYSERR_INVALHANDLE
+}
+
+#[allow(non_snake_case)]
+extern "stdcall" fn mmioSetInfo(_h: u32, _info: u32, _flags: u32) -> u32 {
+    5
+}
+
+#[allow(non_snake_case)]
+extern "stdcall" fn mmioAdvance(_h: u32, _info: u32, _flags: u32) -> u32 {
+    5
+}
+
+#[allow(non_snake_case)]
+extern "stdcall" fn mmioSetBuffer(_h: u32, _buf: u32, _n: u32, _flags: u32) -> u32 {
+    5
 }
 
 // ---- devices that do not exist: MIDI, audio input, mixer, aux --------------------------------

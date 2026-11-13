@@ -272,3 +272,99 @@ unsafe extern "stdcall" fn RegEnumValueA(key: u32, idx: u32, name: *mut u8, name
     }
     ERROR_SUCCESS
 }
+
+// ---- .reg files ---------------------------------------------------------------------------
+
+/// Parses a quoted .reg string, returning it and the rest of the line.
+fn reg_string(s: &str) -> Option<(String, &str)> {
+    let mut out = String::new();
+    let mut chars = s.strip_prefix('"')?.char_indices();
+    while let Some((i, c)) = chars.next() {
+        match c {
+            '\\' => out.push(chars.next()?.1),
+            '"' => return Some((out, &s[i + 2..])),
+            c => out.push(c),
+        }
+    }
+    None
+}
+
+/// Imports a Regedit file (REGEDIT4 or version 5.00): keys, string (`"x"`), `dword:` and `hex:` values.
+/// Games read from the registry what their installer wrote there (install folder, CD path).
+pub fn import_reg(text: &str) -> Result<usize, String> {
+    let mut r = REG.lock().unwrap();
+    let mut key: Option<String> = None;
+    let mut count = 0;
+    // hex values may continue on the next line after a trailing backslash
+    let joined = text.replace("\\\r\n", "").replace("\\\n", "");
+    for (n, raw) in joined.lines().enumerate() {
+        let line = raw.trim();
+        if line.is_empty() || line.starts_with(';') || line.starts_with("REGEDIT") || line.starts_with("Windows Registry") {
+            continue;
+        }
+        if let Some(name) = line.strip_prefix('[').and_then(|l| l.strip_suffix(']')) {
+            let (root, rest) = name.split_once('\\').unwrap_or((name, ""));
+            let root = match root.to_ascii_uppercase().as_str() {
+                "HKEY_CLASSES_ROOT" | "HKCR" => "hkcr",
+                "HKEY_CURRENT_USER" | "HKCU" => "hkcu",
+                "HKEY_LOCAL_MACHINE" | "HKLM" => "hklm",
+                "HKEY_USERS" | "HKU" => "hku",
+                other => return Err(format!("line {}: unknown root key {other}", n + 1)),
+            };
+            let path = if rest.is_empty() { root.to_string() } else { format!("{root}\\{}", rest.to_ascii_lowercase()) };
+            ensure(&mut r, &path);
+            key = Some(path);
+            continue;
+        }
+        let Some(k) = key.clone() else { return Err(format!("line {}: value outside a key", n + 1)) };
+        let (name, rest) = if let Some(rest) = line.strip_prefix('@') {
+            (String::new(), rest)
+        } else {
+            reg_string(line).ok_or(format!("line {}: bad value name", n + 1))?
+        };
+        let data = rest.trim_start().strip_prefix('=').ok_or(format!("line {}: missing '='", n + 1))?.trim();
+        let (ty, bytes) = if data.starts_with('"') {
+            let (v, _) = reg_string(data).ok_or(format!("line {}: bad string", n + 1))?;
+            let mut b = v.into_bytes();
+            b.push(0);
+            (REG_SZ, b)
+        } else if let Some(h) = data.strip_prefix("dword:") {
+            let v = u32::from_str_radix(h.trim(), 16).map_err(|e| format!("line {}: {e}", n + 1))?;
+            (4, v.to_le_bytes().to_vec())
+        } else if let Some(h) = data.strip_prefix("hex") {
+            // hex:aa,bb (binary) or hex(N):aa,bb (type N)
+            let (ty, list) = match h.strip_prefix(':') {
+                Some(list) => (3, list),
+                None => {
+                    let (t, list) = h.strip_prefix('(').and_then(|x| x.split_once("):")).ok_or(format!("line {}: bad hex value", n + 1))?;
+                    (u32::from_str_radix(t, 16).map_err(|e| format!("line {}: {e}", n + 1))?, list)
+                }
+            };
+            let bytes: Result<Vec<u8>, _> =
+                list.split(',').map(str::trim).filter(|x| !x.is_empty()).map(|x| u8::from_str_radix(x, 16)).collect();
+            (ty, bytes.map_err(|e| format!("line {}: {e}", n + 1))?)
+        } else {
+            return Err(format!("line {}: unsupported value {data}", n + 1));
+        };
+        r.keys.entry(k).or_default().values.insert(name.to_ascii_lowercase(), Value { name, ty, data: bytes });
+        count += 1;
+    }
+    Ok(count)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn import_reg_values() {
+        let text = "REGEDIT4\n\n[HKEY_LOCAL_MACHINE\\Software\\Test Co\\Game]\n\"CDPath\"=\"D:\\\\\"\n@=\"default\"\n\"Count\"=dword:0000000a\n\"Bin\"=hex:01,02,\\\n  03\n";
+        assert_eq!(import_reg(text), Ok(4));
+        let r = REG.lock().unwrap();
+        let k = &r.keys["hklm\\software\\test co\\game"];
+        assert_eq!(k.values["cdpath"].data, b"D:\\\0");
+        assert_eq!(k.values[""].data, b"default\0");
+        assert_eq!(k.values["count"].data, 10u32.to_le_bytes());
+        assert_eq!((k.values["bin"].ty, k.values["bin"].data.as_slice()), (3, &[1u8, 2, 3][..]));
+    }
+}

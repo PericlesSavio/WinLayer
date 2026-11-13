@@ -5,6 +5,7 @@ use std::ffi::c_void;
 pub fn resolve(name: &str) -> Option<usize> {
     exports!(
         name,
+        OpenProcess, VirtualQueryEx, GetSystemInfo,
         HeapCreate, HeapDestroy, HeapAlloc, HeapFree, HeapReAlloc, HeapSize, HeapValidate, GetProcessHeap,
         SetLastError, GetCommandLineW, GetEnvironmentStringsW, GetStringTypeA, GetStringTypeW,
         LCMapStringA, LCMapStringW, CompareStringA, CompareStringW, GetVersionExA, GetSystemDirectoryA,
@@ -323,6 +324,29 @@ unsafe extern "stdcall" fn _llseek(h: u32, off: i32, origin: u32) -> u32 {
 extern "stdcall" fn _lclose(h: u32) -> u32 {
     super::files::close(h);
     0
+}
+
+/// Only the program itself can be opened: the pseudo handle of the current process.
+#[allow(non_snake_case)]
+extern "stdcall" fn OpenProcess(_access: u32, _inherit: i32, pid: u32) -> u32 {
+    if pid == std::process::id() { 0xFFFF_FFFF } else { 0 }
+}
+
+#[allow(non_snake_case)]
+unsafe extern "stdcall" fn VirtualQueryEx(_process: u32, addr: u32, info: *mut u32, len: u32) -> u32 {
+    VirtualQuery(addr, info, len)
+}
+
+/// SYSTEM_INFO of a single Pentium Pro class processor, with the Windows page size and 64 KB granularity.
+#[allow(non_snake_case)]
+unsafe extern "stdcall" fn GetSystemInfo(info: *mut u32) {
+    // dwOemId/wProcessorArchitecture, dwPageSize, lpMinimumApplicationAddress, lpMaximumApplicationAddress,
+    // dwActiveProcessorMask, dwNumberOfProcessors, dwProcessorType, dwAllocationGranularity,
+    // wProcessorLevel (6) + wProcessorRevision (0)
+    let v = [0u32, 0x1000, 0x10000, 0x7FFE_FFFF, 1, 1, 586, 0x10000, 6];
+    for (i, x) in v.iter().enumerate() {
+        *info.add(i) = *x;
+    }
 }
 
 #[allow(non_snake_case)]

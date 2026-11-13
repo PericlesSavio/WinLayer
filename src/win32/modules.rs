@@ -8,7 +8,7 @@ use std::sync::Mutex;
 
 /// DLLs whose functions are implemented in Rust (modules of `win32/`).
 /// `_inmm.dll` is GOG's "winmm" (emulates CD audio with OGG): it is treated as the internal winmm, without loading the DLL.
-const BUILTIN: [&str; 19] = ["dplayx.dll", "comdlg32.dll", "msvfw32.dll", "msvcrt.dll", "imm32.dll", "wsock32.dll", "dinput.dll", "shell32.dll", "_inmm.dll", "kernel32.dll", "user32.dll", "gdi32.dll", "advapi32.dll", "ole32.dll", "oleaut32.dll", "comctl32.dll", "winmm.dll", "ddraw.dll", "dsound.dll"];
+const BUILTIN: [&str; 21] = ["version.dll", "avifil32.dll", "dplayx.dll", "comdlg32.dll", "msvfw32.dll", "msvcrt.dll", "imm32.dll", "wsock32.dll", "dinput.dll", "shell32.dll", "_inmm.dll", "kernel32.dll", "user32.dll", "gdi32.dll", "advapi32.dll", "ole32.dll", "oleaut32.dll", "comctl32.dll", "winmm.dll", "ddraw.dll", "dsound.dll"];
 /// Fictitious HMODULEs of the builtins: BUILTIN_BASE + index * 0x10000.
 const BUILTIN_BASE: u32 = 0x7800_0000;
 
@@ -31,6 +31,11 @@ pub fn add_search_dir(dir: PathBuf) {
 }
 
 /// "C:\WINDOWS\SYSTEM\Vb40032.dll" -> "vb40032.dll"
+/// True when winlayer provides the DLL itself.
+pub fn is_builtin(name: &str) -> bool {
+    BUILTIN.contains(&norm(name).as_str())
+}
+
 fn norm(name: &str) -> String {
     let file = name.rsplit(['\\', '/']).next().unwrap_or(name).to_ascii_lowercase();
     if file.contains('.') { file } else { format!("{file}.dll") }
@@ -102,6 +107,23 @@ pub fn module_file_name(base: u32) -> Option<String> {
     MODULES.lock().unwrap().iter().find(|m| m.base == base).map(|m| m.win_path.clone())
 }
 
+/// True when `addr` lies in a non-executable section of a loaded DLL: an exported variable, not a function.
+pub fn is_data_export(addr: u32) -> bool {
+    let ms = MODULES.lock().unwrap();
+    let Some(m) = ms.iter().filter(|m| m.base <= addr).max_by_key(|m| m.base) else { return false };
+    let rva = addr - m.base;
+    unsafe {
+        let r32 = |a: u32| *(a as usize as *const u32);
+        let r16 = |a: u32| *(a as usize as *const u16) as u32;
+        let pe = m.base + r32(m.base + 0x3C);
+        let sections = pe + 24 + r16(pe + 20);
+        (0..r16(pe + 6)).map(|i| sections + i * 40).any(|s| {
+            let (vsize, va, flags) = (r32(s + 8), r32(s + 12), r32(s + 36));
+            rva >= va && rva < va + vsize.max(1) && flags & 0x2000_0000 == 0 // IMAGE_SCN_MEM_EXECUTE
+        })
+    }
+}
+
 /// Loads a DLL (or returns the already loaded one). Builtins return a fictitious HMODULE.
 pub fn load_library(name: &str) -> Option<u32> {
     if let Some(h) = module_handle(name) {
@@ -114,7 +136,7 @@ pub fn load_library(name: &str) -> Option<u32> {
     if pe.characteristics & IMAGE_FILE_DLL == 0 {
         return None;
     }
-    let base = loader::map(&pe, &file).map_err(|e| eprintln!("[winlayer] {n}: {e}")).ok()?;
+    let base = loader::map(&pe, &file).map_err(|e| crate::diag::warn(format!("{n}: {e}"))).ok()?;
     let mut module = unsafe { read_exports(&pe, base) };
     module.name = n.clone();
     module.win_path = win_path_of(&path);

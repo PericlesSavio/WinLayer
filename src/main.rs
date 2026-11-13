@@ -1,5 +1,6 @@
 mod audio;
 mod crash;
+mod diag;
 mod dbgalloc;
 mod loader;
 mod png;
@@ -40,11 +41,15 @@ fn main() -> ExitCode {
         }
         return ExitCode::SUCCESS;
     }
-    // usage: winlayer [--x11 | --shot file.png | --serve PORT [--bind ADDR]] [--events SCRIPT] [--screen WxH] [--dll-path DIR]... [--lazy] program.exe
+    // usage: winlayer [--x11 | --shot file.png | --serve PORT [--bind ADDR]] [--events SCRIPT] [--screen WxH] [--dll-path DIR]... [--cd-label LABEL [--cd DIR]] [--reg FILE.reg]... [--lazy] [--check | --report FILE] program.exe
     let mut args: Vec<String> = std::env::args().skip(1).collect();
     let mut serve_port: Option<u16> = None;
     let mut bind = String::from("127.0.0.1");
     let mut want_x11 = false;
+    let mut check = false;
+    let mut reg_files: Vec<std::path::PathBuf> = Vec::new();
+    let mut report: Option<std::path::PathBuf> = std::env::var_os("WINLAYER_REPORT").map(Into::into);
+    let (mut cd_label, mut cd_dir): (Option<String>, Option<std::path::PathBuf>) = (None, None);
     // options (before the .exe): --shot file.png, --dll-path DIR (repeatable), --lazy
     while args.first().is_some_and(|a| a.starts_with("--")) {
         match args[0].as_str() {
@@ -80,6 +85,30 @@ fn main() -> ExitCode {
                 // COLORREF is 0x00BBGGRR
                 let c = ((rgb & 0xFF) << 16) | (rgb & 0xFF00) | (rgb >> 16);
                 win32::gdi32::DESKTOP_COLOR.store(c, std::sync::atomic::Ordering::Relaxed);
+                args.drain(..2);
+            }
+            // virtual CD-ROM in D: with this volume label; its contents are --cd DIR, or the program folder
+            "--cd-label" if args.len() >= 2 => {
+                cd_label = Some(args[1].clone());
+                args.drain(..2);
+            }
+            "--cd" if args.len() >= 2 => {
+                cd_dir = Some(std::fs::canonicalize(&args[1]).unwrap_or_else(|_| args[1].clone().into()));
+                args.drain(..2);
+            }
+            // static analysis: what the program and its DLLs import that winlayer lacks; nothing runs
+            "--check" => {
+                check = true;
+                args.remove(0);
+            }
+            // runs the program and writes a diagnostics report when it ends (implies --lazy)
+            "--report" if args.len() >= 2 => {
+                report = Some(std::env::current_dir().unwrap_or_default().join(&args[1]));
+                args.drain(..2);
+            }
+            // registry values, as a Regedit file (winlayer.reg next to the program is loaded too)
+            "--reg" if args.len() >= 2 => {
+                reg_files.push(std::env::current_dir().unwrap_or_default().join(&args[1]));
                 args.drain(..2);
             }
             "--lazy" => {
@@ -126,10 +155,43 @@ fn main() -> ExitCode {
         }
     }
     let Some(path) = args.first().map(|p| std::fs::canonicalize(p).map_or(p.clone(), |c| c.to_string_lossy().into_owned())) else {
-        eprintln!("usage: winlayer [--shot output.png] [--screen WxH] [--dll-path DIR]... [--lazy] <program.exe> [args...]");
+        eprintln!("usage: winlayer [--shot output.png] [--screen WxH] [--dll-path DIR]... [--cd-label LABEL [--cd DIR]] [--reg FILE.reg]... [--lazy] [--check | --report FILE] <program.exe> [args...]");
         return ExitCode::from(2);
     };
 
+    if check {
+        let missing = diag::check(std::path::Path::new(&path));
+        return ExitCode::from(if missing == 0 { 0 } else { 1 });
+    }
+    if let Some(file) = report {
+        diag::start(file, &path);
+        loader::set_lazy(true); // missing functions become traps: the run goes on until one is called
+    }
+    let auto_reg = std::path::Path::new(&path).with_file_name("winlayer.reg");
+    if auto_reg.is_file() {
+        reg_files.insert(0, auto_reg);
+    }
+    for file in &reg_files {
+        let loaded = std::fs::read(file).map_err(|e| e.to_string()).and_then(|bytes| {
+            // Regedit 5 files are UTF-16 with a BOM; REGEDIT4 files are ANSI
+            let text = if bytes.starts_with(&[0xFF, 0xFE]) {
+                String::from_utf16_lossy(&bytes[2..].chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])).collect::<Vec<_>>())
+            } else {
+                String::from_utf8_lossy(&bytes).into_owned()
+            };
+            win32::advapi32::import_reg(&text)
+        });
+        match loaded {
+            Ok(n) => eprintln!("[winlayer] registry: {n} values from {}", file.display()),
+            Err(e) => {
+                eprintln!("winlayer: {}: {e}", file.display());
+                return ExitCode::from(2);
+            }
+        }
+    }
+    if cd_label.is_some() || cd_dir.is_some() {
+        win32::files::set_cd(cd_label.unwrap_or_else(|| "CDROM".into()), cd_dir);
+    }
     if let Some(port) = serve_port {
         if let Err(e) = viewer::start(&bind, port) {
             eprintln!("winlayer: could not open the viewer on {bind}:{port}: {e}");

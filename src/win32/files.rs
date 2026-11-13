@@ -20,6 +20,24 @@ static ROOT: OnceLock<PathBuf> = OnceLock::new();
 static TABLE: Mutex<BTreeMap<u32, File>> = Mutex::new(BTreeMap::new());
 static NEXT: AtomicU32 = AtomicU32::new(0x4000);
 
+/// Virtual CD-ROM in drive D:: label and host folder (the program folder when none is given).
+static CD: OnceLock<(String, Option<PathBuf>)> = OnceLock::new();
+
+pub fn set_cd(label: String, dir: Option<PathBuf>) {
+    let _ = CD.set((label, dir));
+}
+
+fn cd_dir() -> Option<PathBuf> {
+    let (_, dir) = CD.get()?;
+    dir.clone().or_else(|| ROOT.get().cloned())
+}
+
+/// Drive letter at the start of a Windows path ("D:\..." -> 'D').
+fn drive_of(win: &str) -> Option<char> {
+    let b = win.as_bytes();
+    (b.len() >= 2 && b[1] == b':').then(|| (b[0] as char).to_ascii_uppercase())
+}
+
 pub fn root() -> Option<&'static PathBuf> {
     ROOT.get()
 }
@@ -33,7 +51,7 @@ pub fn resolve(name: &str) -> Option<usize> {
         name,
         CreateFileA, ReadFile, SetFilePointer, GetFileSize, GetFileAttributesA, GetFullPathNameA,
         GetCurrentDirectoryA, SetCurrentDirectoryA, CreateDirectoryA, GetTempPathA,
-        CreateFileMappingA, MapViewOfFile, UnmapViewOfFile, FindFirstFileA, FindNextFileA, FindClose, GetLogicalDrives, GetDriveTypeA, FileTimeToSystemTime,
+        CreateFileMappingA, MapViewOfFile, MapViewOfFileEx, OpenFileMappingA, UnmapViewOfFile, FindFirstFileA, FindNextFileA, FindClose, GetLogicalDrives, GetDriveTypeA, GetVolumeInformationA, FileTimeToSystemTime,
         FileTimeToLocalFileTime, SetEndOfFile, SetErrorMode, GlobalAddAtomA, GlobalDeleteAtom, lstrlenA,
         lstrcpyA, lstrcatA, lstrcmpA, lstrcmpiA, GetPrivateProfileIntA, GetPrivateProfileStringA, WritePrivateProfileStringA,
     )
@@ -43,6 +61,7 @@ pub fn resolve(name: &str) -> Option<usize> {
 pub fn host_path(win: &str) -> PathBuf {
     let mut s = win.replace('\\', "/");
     let mut rooted = false;
+    let on_cd = drive_of(win) == Some('D') && CD.get().is_some();
     if s.len() >= 2 && s.as_bytes()[1] == b':' {
         s = s[2..].to_string();
         rooted = true;
@@ -50,7 +69,9 @@ pub fn host_path(win: &str) -> PathBuf {
     if s.starts_with('/') {
         rooted = true;
     }
-    let mut cur = if rooted {
+    let mut cur = if on_cd {
+        cd_dir().unwrap_or_default()
+    } else if rooted {
         ROOT.get().cloned().unwrap_or_default()
     } else {
         std::env::current_dir().unwrap_or_default()
@@ -111,7 +132,24 @@ pub unsafe extern "stdcall" fn CreateFileA(name: *const i8, access: u32, _share:
     let (read, write) = (access & 0x8000_0000 != 0, access & 0x4000_0000 != 0);
     let mut o = OpenOptions::new();
     o.read(read || !write).write(write);
-    match disp {
+    // Windows lets a read-only handle create or truncate the file (e.g. OPEN_ALWAYS with GENERIC_READ);
+    // the host needs write access for that, so the file is prepared first and then opened for reading.
+    if !write && matches!(disp, 1 | 2 | 4 | 5) {
+        let exists = path.exists();
+        let prepared = match disp {
+            1 if exists => Err(std::io::Error::from(std::io::ErrorKind::AlreadyExists)),
+            4 if exists => Ok(()),
+            5 if !exists => Err(std::io::Error::from(std::io::ErrorKind::NotFound)),
+            _ => std::fs::File::create(&path).map(|_| ()),
+        };
+        if let Err(e) = prepared {
+            let win = std::ffi::CStr::from_ptr(name).to_string_lossy();
+            crate::diag::note(crate::diag::Kind::FileNotFound, format!("{win} -> {} ({e})", path.display()));
+            set_error(if e.kind() == std::io::ErrorKind::AlreadyExists { ERROR_ALREADY_EXISTS } else { ERROR_FILE_NOT_FOUND });
+            return INVALID_HANDLE;
+        }
+    }
+    match if write { disp } else { 3 } {
         1 => { o.create_new(true); }                     // CREATE_NEW
         2 => { o.create(true).truncate(true); }          // CREATE_ALWAYS
         4 => { o.create(true); }                         // OPEN_ALWAYS
@@ -125,6 +163,8 @@ pub unsafe extern "stdcall" fn CreateFileA(name: *const i8, access: u32, _share:
             h
         }
         Err(e) => {
+            let win = std::ffi::CStr::from_ptr(name).to_string_lossy();
+            crate::diag::note(crate::diag::Kind::FileNotFound, format!("{win} -> {} ({e})", path.display()));
             set_error(if e.kind() == std::io::ErrorKind::AlreadyExists { ERROR_ALREADY_EXISTS } else { ERROR_FILE_NOT_FOUND });
             INVALID_HANDLE
         }
@@ -256,6 +296,8 @@ pub unsafe extern "stdcall" fn CreateDirectoryA(name: *const i8, _sec: u32) -> i
 
 #[allow(non_snake_case)]
 unsafe extern "stdcall" fn GetTempPathA(max: u32, buf: *mut u8) -> u32 {
+    // programs create files there right away: the folder must exist
+    let _ = std::fs::create_dir_all(host_path("C:\\TEMP"));
     put_cstr(buf, max, b"C:\\TEMP\\")
 }
 
@@ -487,12 +529,46 @@ extern "stdcall" fn FindClose(h: u32) -> i32 {
 
 #[allow(non_snake_case)]
 extern "stdcall" fn GetLogicalDrives() -> u32 {
-    0x4 // C: only
+    if CD.get().is_some() { 0xC } else { 0x4 } // C:, plus D: with a CD
+}
+
+/// Drive letters as GetLogicalDriveStringsA lists them.
+pub fn drive_strings() -> &'static [u8] {
+    if CD.get().is_some() { b"C:\\\0D:\\\0\0" } else { b"C:\\\0\0" }
 }
 
 #[allow(non_snake_case)]
-pub extern "stdcall" fn GetDriveTypeA(_root: u32) -> u32 {
-    3 // DRIVE_FIXED
+pub unsafe extern "stdcall" fn GetDriveTypeA(root: *const i8) -> u32 {
+    let win = if root.is_null() { String::new() } else { std::ffi::CStr::from_ptr(root).to_string_lossy().into_owned() };
+    match drive_of(&win) {
+        Some('D') if CD.get().is_some() => 5, // DRIVE_CDROM
+        _ => 3,                               // DRIVE_FIXED
+    }
+}
+
+/// Only the CD has a volume label; for the other drives the call fails, as before.
+#[allow(non_snake_case)]
+pub unsafe extern "stdcall" fn GetVolumeInformationA(
+    root: *const i8, name: *mut u8, name_len: u32, serial: *mut u32, max_comp: *mut u32, flags: *mut u32, fs: *mut u8, fs_len: u32,
+) -> i32 {
+    let win = if root.is_null() { String::new() } else { std::ffi::CStr::from_ptr(root).to_string_lossy().into_owned() };
+    let Some((label, _)) = CD.get().filter(|_| drive_of(&win) == Some('D')) else { return 0 };
+    if !name.is_null() {
+        put_cstr(name, name_len, label.as_bytes());
+    }
+    if !serial.is_null() {
+        *serial = 0x1997_0001;
+    }
+    if !max_comp.is_null() {
+        *max_comp = 255;
+    }
+    if !flags.is_null() {
+        *flags = 0x0008_0000; // FILE_READ_ONLY_VOLUME
+    }
+    if !fs.is_null() {
+        put_cstr(fs, fs_len, b"CDFS");
+    }
+    1
 }
 
 #[allow(non_snake_case)]
@@ -628,6 +704,19 @@ extern "stdcall" fn CreateFileMappingA(file: u32, _attr: u32, _protect: u32, siz
     let h = NEXT.fetch_add(4, Ordering::Relaxed);
     MAPPINGS.lock().unwrap().insert(h, Mapping { data });
     h
+}
+
+/// The requested address is only a hint: the view goes wherever MapViewOfFile puts it.
+#[allow(non_snake_case)]
+extern "stdcall" fn MapViewOfFileEx(h: u32, access: u32, off_hi: u32, off_lo: u32, bytes: usize, _base: u32) -> u32 {
+    MapViewOfFile(h, access, off_hi, off_lo, bytes)
+}
+
+/// Named mappings are never shared: another process that created one does not exist.
+#[allow(non_snake_case)]
+extern "stdcall" fn OpenFileMappingA(_access: u32, _inherit: i32, _name: u32) -> u32 {
+    set_error(ERROR_FILE_NOT_FOUND);
+    0
 }
 
 #[allow(non_snake_case)]

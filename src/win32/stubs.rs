@@ -64,11 +64,6 @@ pub extern "stdcall" fn GetTempFileNameA(_a: u32, _b: u32, _c: u32, _d: u32) -> 
 }
 
 #[allow(non_snake_case)]
-pub extern "stdcall" fn GetVolumeInformationA(_a: u32, _b: u32, _c: u32, _d: u32, _e: u32, _f: u32, _g: u32, _h: u32) -> u32 {
-    0
-}
-
-#[allow(non_snake_case)]
 pub extern "stdcall" fn GetShortPathNameA(_a: u32, _b: u32, _c: u32) -> u32 {
     0
 }
@@ -155,6 +150,58 @@ pub unsafe extern "stdcall" fn OutputDebugStringA(s: *const i8) {
     }
 }
 
+/// No debugger to stop in: the breakpoint is only reported.
+#[allow(non_snake_case)]
+pub extern "stdcall" fn DebugBreak() {
+    crate::diag::warn("DebugBreak".into());
+}
+
+#[allow(non_snake_case)]
+pub extern "stdcall" fn CheckRadioButton(dlg: u32, first: i32, last: i32, check: i32) -> i32 {
+    for id in first..=last {
+        super::user32::SendDlgItemMessageA(dlg, id, 0xF1, (id == check) as u32, 0); // BM_SETCHECK
+    }
+    1
+}
+
+/// Class data is not kept: returns the "previous" value 0.
+#[allow(non_snake_case)]
+pub extern "stdcall" fn SetClassLongA(_hwnd: u32, _index: i32, _value: u32) -> u32 {
+    0
+}
+
+/// System colors are fixed: the change is accepted and ignored.
+#[allow(non_snake_case)]
+pub extern "stdcall" fn SetSysColors(_n: i32, _elements: u32, _colors: u32) -> i32 {
+    1
+}
+
+#[allow(non_snake_case)]
+pub extern "stdcall" fn GetCaretBlinkTime() -> u32 {
+    530 // Windows default, in ms
+}
+
+/// Windows are repainted whole: there is never a pending update region (empty rectangle, FALSE).
+#[allow(non_snake_case)]
+pub unsafe extern "stdcall" fn GetUpdateRect(_hwnd: u32, rect: *mut i32, _erase: i32) -> i32 {
+    if !rect.is_null() {
+        std::ptr::write_bytes(rect, 0, 4);
+    }
+    0
+}
+
+/// No input method editor: there is no previous context.
+#[allow(non_snake_case)]
+pub extern "stdcall" fn ImmAssociateContext(_hwnd: u32, _himc: u32) -> u32 {
+    0
+}
+
+/// Drawing is synchronous: nothing is pending.
+#[allow(non_snake_case)]
+pub extern "stdcall" fn GdiFlush() -> i32 {
+    1
+}
+
 #[allow(non_snake_case)]
 pub extern "stdcall" fn TerminateProcess(process: u32, code: u32) -> u32 {
     if process == 0xFFFF_FFFF {
@@ -186,6 +233,7 @@ pub extern "stdcall" fn EnumSystemLocalesA(cb: u32, _flags: u32) -> i32 {
 
 #[allow(non_snake_case)]
 pub unsafe extern "stdcall" fn FatalAppExitA(_action: u32, msg: *const i8) {
+    crate::diag::note(crate::diag::Kind::MessageBox, format!("FatalAppExit: {}", cstr_at(msg)));
     eprintln!("[winlayer] FatalAppExit: {}", cstr_at(msg));
     super::kernel32::exit_process(1)
 }
@@ -298,7 +346,7 @@ pub extern "stdcall" fn VirtualUnlock(_p: u32, _n: u32) -> i32 {
 }
 
 pub fn resolve_kernel32(name: &str) -> Option<usize> {
-    exports!(name, _lopen, _hread, CompareFileTime, GetDateFormatA, GetTimeFormatA, GetLogicalDriveStringsA, InterlockedExchange, OpenMutexA, SetVolumeLabelA, CopyFileA, EnumSystemLocalesA, FatalAppExitA, FileTimeToDosDateTime, GetSystemTimeAsFileTime, GlobalMemoryStatus, InterlockedIncrement, InterlockedDecrement, lstrcpynA, OpenFile, VirtualLock, VirtualUnlock, DisableThreadLibraryCalls, GetProfileIntA, LoadModule, OutputDebugStringA, TerminateProcess, CreateFileMappingA, SetHandleCount, GetFileTime, GetUserDefaultLangID, FormatMessageW, FlushInstructionCache, VirtualQuery, GlobalSize, GetProfileStringA, SearchPathA, GlobalHandle, GetTempFileNameA, GetVolumeInformationA, GetShortPathNameA, IsDBCSLeadByte, IsValidLocale, PeekNamedPipe, HeapCompact, HeapLock, HeapUnlock, HeapWalk, GetLocaleInfoA, GetLocaleInfoW, lstrcmpiW, FreeEnvironmentStringsA, FreeEnvironmentStringsW)
+    exports!(name, _lopen, _hread, CompareFileTime, GetDateFormatA, GetTimeFormatA, GetLogicalDriveStringsA, InterlockedExchange, OpenMutexA, SetVolumeLabelA, CopyFileA, EnumSystemLocalesA, FatalAppExitA, FileTimeToDosDateTime, GetSystemTimeAsFileTime, GlobalMemoryStatus, InterlockedIncrement, InterlockedDecrement, lstrcpynA, OpenFile, VirtualLock, VirtualUnlock, DisableThreadLibraryCalls, GetProfileIntA, LoadModule, OutputDebugStringA, TerminateProcess, CreateFileMappingA, SetHandleCount, GetFileTime, GetUserDefaultLangID, FormatMessageW, FlushInstructionCache, VirtualQuery, GlobalSize, GetProfileStringA, SearchPathA, GlobalHandle, GetTempFileNameA, GetShortPathNameA, IsDBCSLeadByte, IsValidLocale, PeekNamedPipe, HeapCompact, HeapLock, HeapUnlock, HeapWalk, GetLocaleInfoA, GetLocaleInfoW, lstrcmpiW, FreeEnvironmentStringsA, FreeEnvironmentStringsW, DebugBreak)
 }
 
 #[allow(non_snake_case)]
@@ -742,7 +790,7 @@ pub unsafe extern "stdcall" fn SystemParametersInfoA(action: u32, _ui: u32, pv: 
 }
 
 pub fn resolve_user32(name: &str) -> Option<usize> {
-    exports!(name, GetKeyboardLayout, GetKeyboardLayoutList, SystemParametersInfoA, GetMessagePos, GetMessageTime, SetMenuDefaultItem, GetDoubleClickTime, TrackPopupMenu, DrawFocusRect, GetCaretPos, SetCaretPos, DestroyIcon, IsZoomed, DrawMenuBar, DefMDIChildProcA, FindWindowW, LoadStringW, SetWindowsHookExW, VkKeyScanW, VkKeyScanA, keybd_event, SetKeyboardState, GetForegroundWindow, DeferWindowPos, EndDeferWindowPos, BeginDeferWindowPos, GetSystemMenu, WaitForInputIdle, CloseClipboard, EmptyClipboard, OpenClipboard, SetScrollRange, IsClipboardFormatAvailable, MapWindowPoints, DdeConnect, DdeFreeStringHandle, DdeFreeDataHandle, DdeCreateStringHandleA, DdeNameService, DdeQueryStringA, DdeQueryConvInfo, DdeUninitialize, DdeInitializeA, DdeSetUserHandle, DdeClientTransaction, DdeAbandonTransaction, DdePostAdvise, DdeCreateDataHandle, DdeGetData, DdeGetLastError, DdeDisconnect, UnregisterClassA, SetWindowWord, GetClassLongA, GetAsyncKeyState, GetTabbedTextExtentA, CreateIcon, CreateCursor, EnumClipboardFormats, DestroyCursor, GetCursor, DrawIcon, TranslateMDISysAccel, RegisterClipboardFormatA, GetClipboardFormatNameA, PostThreadMessageA, RegisterWindowMessageA, AttachThreadInput, GetUpdateRgn, WindowFromPoint, GetScrollPos, SetScrollPos, SetCursorPos, GetClipboardData, SetClipboardData, SetForegroundWindow, GetMenuState, GetMenuStringA, DeleteMenu, DefFrameProcA, RemoveMenu, GetActiveWindow, InsertMenuA, SetWindowContextHelpId, CopyImage, CopyIcon, GetIconInfo)
+    exports!(name, GetKeyboardLayout, GetKeyboardLayoutList, SystemParametersInfoA, GetMessagePos, GetMessageTime, SetMenuDefaultItem, GetDoubleClickTime, TrackPopupMenu, DrawFocusRect, GetCaretPos, SetCaretPos, DestroyIcon, IsZoomed, DrawMenuBar, DefMDIChildProcA, FindWindowW, LoadStringW, SetWindowsHookExW, VkKeyScanW, VkKeyScanA, keybd_event, SetKeyboardState, GetForegroundWindow, DeferWindowPos, EndDeferWindowPos, BeginDeferWindowPos, GetSystemMenu, WaitForInputIdle, CloseClipboard, EmptyClipboard, OpenClipboard, SetScrollRange, IsClipboardFormatAvailable, MapWindowPoints, DdeConnect, DdeFreeStringHandle, DdeFreeDataHandle, DdeCreateStringHandleA, DdeNameService, DdeQueryStringA, DdeQueryConvInfo, DdeUninitialize, DdeInitializeA, DdeSetUserHandle, DdeClientTransaction, DdeAbandonTransaction, DdePostAdvise, DdeCreateDataHandle, DdeGetData, DdeGetLastError, DdeDisconnect, UnregisterClassA, SetWindowWord, GetClassLongA, GetAsyncKeyState, GetTabbedTextExtentA, CreateIcon, CreateCursor, EnumClipboardFormats, DestroyCursor, GetCursor, DrawIcon, TranslateMDISysAccel, RegisterClipboardFormatA, GetClipboardFormatNameA, PostThreadMessageA, RegisterWindowMessageA, AttachThreadInput, GetUpdateRgn, WindowFromPoint, GetScrollPos, SetScrollPos, SetCursorPos, GetClipboardData, SetClipboardData, SetForegroundWindow, GetMenuState, GetMenuStringA, DeleteMenu, DefFrameProcA, RemoveMenu, GetActiveWindow, InsertMenuA, SetWindowContextHelpId, CopyImage, CopyIcon, GetIconInfo, CheckRadioButton, SetClassLongA, SetSysColors, GetCaretBlinkTime, GetUpdateRect)
 }
 
 #[allow(non_snake_case)]
@@ -1022,7 +1070,7 @@ pub extern "stdcall" fn GetSystemPaletteUse(_hdc: u32) -> u32 {
 }
 
 pub fn resolve_gdi32(name: &str) -> Option<usize> {
-    exports!(name, GetLayout, SetLayout, SetSystemPaletteUse, GetSystemPaletteEntries, GetSystemPaletteUse, OffsetWindowOrgEx, UnrealizeObject, SetBrushOrgEx, GetViewportExtEx, SetROP2, GetROP2, IntersectClipRect, Escape, CombineRgn, ExcludeClipRect, SetRectRgn, GetWindowExtEx, SetWindowOrgEx, CreateRectRgn, SetAbortProc, EnumFontsA, Arc, SetStretchBltMode, Pie, GetBitmapBits, CopyEnhMetaFileA, CopyMetaFileA, GetDIBits, CloseMetaFile, CreateMetaFileA, DeleteMetaFile, SelectClipRgn, CreateRectRgnIndirect, PlayMetaFile, EndDoc, StartPage, EndPage, AbortDoc, ResetDCA, StartDocA, GetNearestColor, DeleteEnhMetaFile, SetMetaFileBitsEx, GetEnhMetaFileHeader, GetBitmapDimensionEx, SetEnhMetaFileBits, PlayMetaFileRecord, GetWinMetaFileBits, GetWindowOrgEx, CreateHalftonePalette, GetEnhMetaFileBits, GetMetaFileBitsEx, SetDIBits, SetBitmapBits, PlayEnhMetaFile, EnumMetaFile)
+    exports!(name, GetLayout, SetLayout, SetSystemPaletteUse, GetSystemPaletteEntries, GetSystemPaletteUse, OffsetWindowOrgEx, UnrealizeObject, SetBrushOrgEx, GetViewportExtEx, SetROP2, GetROP2, IntersectClipRect, Escape, CombineRgn, ExcludeClipRect, SetRectRgn, GetWindowExtEx, SetWindowOrgEx, CreateRectRgn, SetAbortProc, EnumFontsA, Arc, SetStretchBltMode, Pie, GetBitmapBits, CopyEnhMetaFileA, CopyMetaFileA, GetDIBits, CloseMetaFile, CreateMetaFileA, DeleteMetaFile, SelectClipRgn, CreateRectRgnIndirect, PlayMetaFile, EndDoc, StartPage, EndPage, AbortDoc, ResetDCA, StartDocA, GetNearestColor, DeleteEnhMetaFile, SetMetaFileBitsEx, GetEnhMetaFileHeader, GetBitmapDimensionEx, SetEnhMetaFileBits, PlayMetaFileRecord, GetWinMetaFileBits, GetWindowOrgEx, CreateHalftonePalette, GetEnhMetaFileBits, GetMetaFileBitsEx, SetDIBits, SetBitmapBits, PlayEnhMetaFile, EnumMetaFile, GdiFlush)
 }
 
 #[allow(non_snake_case)]
@@ -1560,7 +1608,7 @@ pub unsafe extern "stdcall" fn GetTimeFormatA(_lcid: u32, _flags: u32, st: *cons
 /// Only drive C: exists, which is the game folder.
 #[allow(non_snake_case)]
 pub unsafe extern "stdcall" fn GetLogicalDriveStringsA(n: u32, buf: *mut u8) -> u32 {
-    let drives = b"C:\\\0\0";
+    let drives = super::files::drive_strings();
     if buf.is_null() || (n as usize) < drives.len() {
         return drives.len() as u32;
     }
@@ -1639,13 +1687,13 @@ pub fn resolve_comdlg32(name: &str) -> Option<usize> {
 }
 
 pub fn resolve_msvfw32(name: &str) -> Option<usize> {
-    exports!(name, MCIWndCreateA)
+    exports!(name, MCIWndCreateA).or_else(|| super::avifil32::resolve_msvfw32(name))
 }
 
 /// There is no file dialog: answers as if the user had cancelled it.
 #[allow(non_snake_case)]
 extern "stdcall" fn GetOpenFileNameA(_ofn: u32) -> i32 {
-    eprintln!("[winlayer] GetOpenFileNameA: no file dialog, reporting cancel");
+    crate::diag::warn("GetOpenFileNameA: no file dialog, reporting cancel".into());
     0
 }
 
@@ -1653,12 +1701,12 @@ extern "stdcall" fn GetOpenFileNameA(_ofn: u32) -> i32 {
 #[allow(non_snake_case)]
 unsafe extern "C" fn MCIWndCreateA(_parent: u32, _instance: u32, _style: u32, file: *const i8) -> u32 {
     let file = if file.is_null() { "".into() } else { std::ffi::CStr::from_ptr(file).to_string_lossy() };
-    eprintln!("[winlayer] MCIWndCreateA: video not supported ({file})");
+    crate::diag::warn(format!("MCIWndCreateA: video not supported ({file})"));
     0
 }
 
 pub fn resolve_imm32(name: &str) -> Option<usize> {
-    exports!(name, ImmCreateContext, ImmDestroyContext, ImmGetCandidateListA, ImmGetCompositionStringA, ImmGetContext, ImmGetDescriptionA, ImmGetOpenStatus, ImmGetProperty, ImmNotifyIME, ImmReleaseContext, ImmSetCompositionStringA, ImmSetCompositionWindow, ImmSetOpenStatus)
+    exports!(name, ImmAssociateContext, ImmCreateContext, ImmDestroyContext, ImmGetCandidateListA, ImmGetCompositionStringA, ImmGetContext, ImmGetDescriptionA, ImmGetOpenStatus, ImmGetProperty, ImmNotifyIME, ImmReleaseContext, ImmSetCompositionStringA, ImmSetCompositionWindow, ImmSetOpenStatus)
 }
 
 #[allow(non_snake_case)]

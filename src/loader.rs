@@ -123,8 +123,6 @@ fn apply_relocations(pe: &Pe32, base: *mut u8, delta: u32) {
 static TRAP_NAMES: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
 static TRAP_PAGE: std::sync::Mutex<(usize, usize)> = std::sync::Mutex::new((0, 0)); // (address, used)
 
-static API_NAMES: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
-
 #[repr(C)]
 struct IoVec {
     base: *mut c_void,
@@ -132,7 +130,7 @@ struct IoVec {
 }
 
 extern "C" {
-    fn process_vm_readv(pid: i32, local: *const IoVec, lcnt: u64, remote: *const IoVec, rcnt: u64, flags: u64) -> isize;
+    fn process_vm_readv(pid: i32, local: *const IoVec, lcnt: usize, remote: *const IoVec, rcnt: usize, flags: usize) -> isize;
 }
 
 /// Reads up to `n` bytes from any address without risking SIGSEGV (via process_vm_readv on the process itself).
@@ -148,8 +146,22 @@ pub(crate) fn peek(addr: u32, n: usize) -> Vec<u8> {
     buf
 }
 
-extern "C" fn log_api(idx: u32, args: *const u32) {
-    let name = API_NAMES.lock().unwrap().get(idx as usize).cloned().unwrap_or_default();
+/// The text `addr` points to, if it looks like a string (3+ printable characters).
+pub(crate) fn peek_text(addr: u32) -> Option<String> {
+    let bytes = peek(addr, 40);
+    let text: String = bytes.iter().take_while(|&&c| (32..127).contains(&c)).map(|&c| c as char).collect();
+    (text.len() >= 3).then_some(text)
+}
+
+static PRINT_API: AtomicBool = AtomicBool::new(false);
+
+/// Runs before each wrapped import: counts it for the report and, with WINLAYER_API_TRACE, prints it.
+extern "C" fn on_api(idx: u32, args: *const u32) {
+    crate::diag::on_call(idx, args);
+    if !PRINT_API.load(Ordering::Relaxed) {
+        return;
+    }
+    let name = crate::diag::name(idx);
     let mut line = format!("[api] {name}(");
     for i in 0..4 {
         let a = unsafe { *args.add(i) };
@@ -157,9 +169,7 @@ extern "C" fn log_api(idx: u32, args: *const u32) {
             line.push_str(", ");
         }
         line.push_str(&format!("{a:#x}"));
-        let bytes = peek(a, 40);
-        let text: String = bytes.iter().take_while(|&&c| (32..127).contains(&c)).map(|&c| c as char).collect();
-        if text.len() >= 3 {
+        if let Some(text) = peek_text(a) {
             line.push_str(&format!(" \"{text}\""));
         }
     }
@@ -169,10 +179,7 @@ extern "C" fn log_api(idx: u32, args: *const u32) {
 
 /// Trace stub: preserves registers and flags, logs the name and jumps to the real function.
 fn make_trace_thunk(label: String, target: u32) -> u32 {
-    let mut names = API_NAMES.lock().unwrap();
-    let idx = names.len() as u32;
-    names.push(label);
-    drop(names);
+    let idx = crate::diag::register(&label);
     let mut page = TRACE_PAGE.lock().unwrap();
     if page.0 == 0 || page.1 + 48 > 4096 {
         let p = unsafe { mmap(std::ptr::null_mut(), 4096, PROT_READ | PROT_WRITE | PROT_EXEC, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0) };
@@ -185,7 +192,7 @@ fn make_trace_thunk(label: String, target: u32) -> u32 {
     let mut code = vec![0x9C, 0x60, 0x89, 0xE0, 0x83, 0xC0, 0x28, 0x50, 0x68];
     code.extend_from_slice(&idx.to_le_bytes());
     code.push(0xB8);
-    code.extend_from_slice(&(log_api as usize as u32).to_le_bytes());
+    code.extend_from_slice(&(on_api as usize as u32).to_le_bytes());
     code.extend_from_slice(&[0xFF, 0xD0, 0x83, 0xC4, 0x08, 0x61, 0x9D, 0x68]);
     code.extend_from_slice(&target.to_le_bytes());
     code.push(0xC3);
@@ -198,6 +205,8 @@ static TRACE_PAGE: std::sync::Mutex<(usize, usize)> = std::sync::Mutex::new((0, 
 extern "C" fn missing_import(idx: u32) -> ! {
     let name = TRAP_NAMES.lock().unwrap().get(idx as usize).cloned().unwrap_or_default();
     eprintln!("\n[winlayer] UNIMPLEMENTED import called: {name}");
+    crate::diag::note(crate::diag::Kind::MissingCalled, name.clone());
+    crate::diag::set_end(format!("missing function called: {name}"));
     win32::kernel32::exit_process(3)
 }
 
@@ -227,7 +236,9 @@ fn make_trap(name: String) -> u32 {
 /// (in lazy mode, with a trap already installed).
 pub fn fill_imports(pe: &Pe32, base: u32) -> Vec<String> {
     let lazy = LAZY.load(Ordering::Relaxed);
-    let trace = std::env::var_os("WINLAYER_API_TRACE").is_some();
+    let print = std::env::var_os("WINLAYER_API_TRACE").is_some();
+    PRINT_API.store(print, Ordering::Relaxed);
+    let trace = print || crate::diag::enabled();
     let mut missing = Vec::new();
     for imp in &pe.imports {
         for (i, name) in imp.names.iter().enumerate() {
@@ -238,10 +249,11 @@ pub fn fill_imports(pe: &Pe32, base: u32) -> Vec<String> {
             let addr = modules::resolve_import(&imp.dll, name).or_else(|| {
                 if std::env::var_os("WINLAYER_TRACE").is_some() { eprintln!("[loader] missing {label}") }
                 missing.push(label.clone());
+                crate::diag::note(crate::diag::Kind::MissingImport, label.clone());
                 lazy.then(|| make_trap(label.clone()))
             });
             let addr = match addr {
-                Some(a) if trace && !label.starts_with("missing") => Some(make_trace_thunk(label.clone(), a)),
+                Some(a) if trace && !label.starts_with("missing") && !win32::msvcrt::is_data(&label) && !modules::is_data_export(a) => Some(make_trace_thunk(label.clone(), a)),
                 other => other,
             };
             if let Some(a) = addr {

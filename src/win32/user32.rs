@@ -240,7 +240,7 @@ pub fn resolve(name: &str) -> Option<usize> {
         PostQuitMessage, BeginPaint, EndPaint, InvalidateRect, GetClientRect, MoveWindow,
         GetDC, ReleaseDC, LoadCursorA, LoadIconA, FindWindowA, GetLastActivePopup, IsIconic,
         GetMenu, CheckMenuItem, DialogBoxParamA, EndDialog,
-        SendDlgItemMessageA, wsprintfA, GetWindowRect, DestroyWindow, SetWindowPos, GetWindowLongA,
+        SendDlgItemMessageA, wsprintfA, wvsprintfA, GetWindowRect, DestroyWindow, SetWindowPos, GetWindowLongA,
         SetWindowLongA, ScreenToClient, ClientToScreen, GetParent, GetWindow, GetDesktopWindow,
         GetClassInfoA, EnableWindow, IsWindowEnabled, CallWindowProcA, ValidateRect, LoadMenuA, DestroyMenu, SetMenu, GetMenu, EnableMenuItem,
         CheckMenuItem, ModifyMenuA, GetSubMenu, GetMenuItemCount, GetMenuItemID, AdjustWindowRect,
@@ -1110,10 +1110,20 @@ const IDOK: i32 = 1;
 #[allow(non_snake_case)]
 pub unsafe extern "stdcall" fn MessageBoxA(_hwnd: u32, text: u32, caption: u32, _kind: u32) -> i32 {
     eprintln!("[MessageBox] {}\n{}", cstr(caption), cstr(text));
+    if crate::diag::enabled() {
+        crate::diag::note(crate::diag::Kind::MessageBox, format!("{}: {}{}", cstr(caption), cstr(text), crate::diag::callers()));
+    }
     IDOK
 }
 
 // ---- wsprintfA (cdecl, variadic) ----------------------------------------------------------
+
+/// The arguments come as a va_list (a pointer to them on the stack): the same first 8 as wsprintfA.
+#[allow(non_snake_case)]
+unsafe extern "stdcall" fn wvsprintfA(out: *mut u8, fmt: *const u8, args: *const u32) -> i32 {
+    let a = |i: usize| if args.is_null() { 0 } else { *args.add(i) };
+    wsprintfA(out, fmt, a(0), a(1), a(2), a(3), a(4), a(5), a(6), a(7))
+}
 
 /// We read up to 8 "extra" arguments from the stack; whatever the caller did not push is ignored garbage.
 #[allow(non_snake_case)]
@@ -1311,18 +1321,21 @@ unsafe fn skip_ord_or_str(p: u32) -> u32 {
     }
 }
 
-/// Creates a dialog (window + controls) from a DLGTEMPLATE and sends WM_INITDIALOG.
+/// Creates a dialog (window + controls) from a DLGTEMPLATE or DLGTEMPLATEEX and sends WM_INITDIALOG.
 unsafe fn create_dialog(tmpl: u32, parent: u32, dlgproc: u32, param: u32) -> u32 {
-    let style = r32(tmpl);
-    let cdit = r16(tmpl + 8);
-    let (dcx, dcy) = (r16s(tmpl + 14), r16s(tmpl + 16));
-    let mut p = skip_ord_or_str(tmpl + 18); // menu
+    // DLGTEMPLATEEX starts with dlgVer = 1 and signature = 0xFFFF; its fields sit at other offsets.
+    let ex = r16(tmpl) == 1 && r16(tmpl + 2) == 0xFFFF;
+    let h0 = if ex { tmpl + 8 } else { tmpl }; // skips dlgVer, signature, helpID
+    let style = if ex { r32(h0 + 4) } else { r32(h0) };
+    let cdit = r16(h0 + 8);
+    let (dcx, dcy) = (r16s(h0 + 14), r16s(h0 + 16));
+    let mut p = skip_ord_or_str(h0 + 18); // menu
     p = skip_ord_or_str(p); // class
     let (title, np) = resources::wide_z(p);
     p = np;
     if style & 0x40 != 0 {
-        // DS_SETFONT: size + font name
-        p = resources::wide_z(p + 2).1;
+        // DS_SETFONT: size (+ weight, italic, charset in the extended form) + font name
+        p = resources::wide_z(p + if ex { 6 } else { 2 }).1;
     }
     let (cw, ch) = (dcx * DLU_X / 4, dcy * DLU_Y / 8);
     let caption = style & WS_CAPTION == WS_CAPTION;
@@ -1334,8 +1347,16 @@ unsafe fn create_dialog(tmpl: u32, parent: u32, dlgproc: u32, param: u32) -> u32
     let mut first = 0;
     for _ in 0..cdit {
         p = tmpl + ((p - tmpl + 3) & !3);
-        let (istyle, ix, iy, icx, icy, iid) = (r32(p), r16s(p + 8), r16s(p + 10), r16s(p + 12), r16s(p + 14), r16(p + 16));
-        p += 18;
+        let (istyle, ix, iy, icx, icy, iid) = if ex {
+            // helpID, exStyle, style, x, y, cx, cy, id (32-bit)
+            let v = (r32(p + 8), r16s(p + 12), r16s(p + 14), r16s(p + 16), r16s(p + 18), r32(p + 20) as u16 as u32);
+            p += 24;
+            v
+        } else {
+            let v = (r32(p), r16s(p + 8), r16s(p + 10), r16s(p + 12), r16s(p + 14), r16(p + 16));
+            p += 18;
+            v
+        };
         let class = if r16(p) == 0xFFFF {
             let atom = r16(p + 2);
             p += 4;
@@ -1379,7 +1400,7 @@ unsafe fn dialog_template(inst: u32, name: u32) -> Option<u32> {
 #[allow(non_snake_case)]
 pub unsafe extern "stdcall" fn DialogBoxParamA(inst: u32, name: u32, parent: u32, dlgproc: u32, param: u32) -> i32 {
     let Some(tmpl) = dialog_template(inst, name) else {
-        eprintln!("[winlayer] DialogBoxParamA: dialog resource not found");
+        crate::diag::warn("DialogBoxParamA: dialog resource not found".into());
         return -1;
     };
     modal_dialog(tmpl, parent, dlgproc, param)

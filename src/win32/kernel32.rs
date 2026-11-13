@@ -105,6 +105,7 @@ pub fn resolve(name: &str) -> Option<usize> {
 }
 
 pub fn exit_process(code: u32) -> ! {
+    crate::diag::set_end(format!("ExitProcess({code})"));
     let _ = std::io::stdout().flush();
     std::process::exit(code as i32)
 }
@@ -303,9 +304,32 @@ extern "stdcall" fn VirtualAlloc(addr: usize, size: usize, _kind: u32, _protect:
         }
     }
     let len = (size.max(1) + PAGE - 1) & !(PAGE - 1);
-    let flags = MAP_PRIVATE | MAP_ANONYMOUS | if addr != 0 { MAP_FIXED_NOREPLACE } else { 0 };
-    let p = unsafe { mmap(addr as *mut c_void, len, PROT_RWX, flags, -1, 0) };
-    if p as isize == -1 || (addr != 0 && p as usize != addr) {
+    if addr == 0 {
+        // Windows hands out regions on 64 KB boundaries (the allocation granularity), and some allocators
+        // rely on it: they find a block's header by rounding a pointer down to 64 KB. Maps 64 KB more and
+        // trims both ends.
+        const GRAIN: usize = 0x10000;
+        let p = unsafe { mmap(std::ptr::null_mut(), len + GRAIN, PROT_RWX, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0) };
+        if p as isize == -1 {
+            set_error(ERROR_NOT_ENOUGH_MEMORY);
+            return 0;
+        }
+        let raw = p as usize;
+        let start = (raw + GRAIN - 1) & !(GRAIN - 1);
+        unsafe {
+            if start > raw {
+                munmap(raw as *mut c_void, start - raw);
+            }
+            let tail = raw + len + GRAIN - (start + len);
+            if tail > 0 {
+                munmap((start + len) as *mut c_void, tail);
+            }
+        }
+        regions.insert(start, len);
+        return start;
+    }
+    let p = unsafe { mmap(addr as *mut c_void, len, PROT_RWX, MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED_NOREPLACE, -1, 0) };
+    if p as isize == -1 || p as usize != addr {
         set_error(ERROR_NOT_ENOUGH_MEMORY);
         return 0;
     }
@@ -369,9 +393,11 @@ extern "C" {
 
 #[allow(non_snake_case)]
 unsafe extern "stdcall" fn LoadLibraryA(name: *const i8) -> u32 {
-    match super::modules::load_library(&std::ffi::CStr::from_ptr(name).to_string_lossy()) {
+    let dll = std::ffi::CStr::from_ptr(name).to_string_lossy();
+    match super::modules::load_library(&dll) {
         Some(h) => h,
         None => {
+            crate::diag::note(crate::diag::Kind::DllNotFound, dll.into_owned());
             set_error(ERROR_MOD_NOT_FOUND);
             0
         }
@@ -380,6 +406,16 @@ unsafe extern "stdcall" fn LoadLibraryA(name: *const i8) -> u32 {
 
 #[allow(non_snake_case)]
 unsafe extern "stdcall" fn GetProcAddress(module: u32, name: u32) -> u32 {
+    let r = get_proc_address(module, name);
+    if r == 0 && crate::diag::enabled() {
+        let dll = super::modules::module_file_name(module).unwrap_or_else(|| format!("{module:#x}"));
+        let f = if name < 0x10000 { format!("#{name}") } else { std::ffi::CStr::from_ptr(name as usize as *const i8).to_string_lossy().into_owned() };
+        crate::diag::note(crate::diag::Kind::ProcNotFound, format!("{dll}!{f}"));
+    }
+    r
+}
+
+unsafe fn get_proc_address(module: u32, name: u32) -> u32 {
     use super::modules::{get_proc, Proc};
     let p = if name < 0x10000 {
         Proc::Ordinal(name)
@@ -546,6 +582,11 @@ extern "stdcall" fn FreeLibrary(_m: u32) -> i32 { // DLLs stay loaded until the 
 #[allow(non_snake_case)]
 extern "stdcall" fn RaiseException(code: u32, _flags: u32, _n: u32, _args: u32) -> ! {
     eprintln!("[winlayer] RaiseException({code:#x})");
+    let what = if code == 0xE06D_7363 { " (C++ throw; exceptions are not supported)" } else { "" };
+    if crate::diag::enabled() {
+        crate::diag::note(crate::diag::Kind::Exception, format!("RaiseException({code:#x}){what}{}", crate::diag::callers()));
+    }
+    crate::diag::set_end(format!("unhandled exception {code:#x}"));
     exit_process(code)
 }
 

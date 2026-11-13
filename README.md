@@ -61,6 +61,9 @@ winlayer --x11 /path/to/game/GAME.EXE
 | `--desktop RRGGBB` | Desktop background color |
 | `--dll-path DIR` | Extra folder to search for DLLs (repeatable) |
 | `--lazy` | Turn missing imports into traps instead of refusing to start |
+| `--cd-label LABEL [--cd DIR]` | Virtual CD-ROM drive `D:` with this volume label, mapped to the game folder (or `DIR`) |
+| `--check` | List what the program and its DLLs import that winlayer lacks, without running it |
+| `--report FILE.md` | Run the program and write a diagnostics report when it ends (implies `--lazy`) |
 | `--playtime` | Show minutes and sessions per game, then exit |
 | `--win16-selftest` | Check that 16-bit code can run on this kernel |
 
@@ -71,6 +74,19 @@ minute and on exit. After a crash, at most the last minute is lost. It counts th
 mode is not counted.
 
 ### Debugging
+
+To find what a game needs, start with `--check` (static: missing functions per DLL, DLLs that nobody provides and
+DLL names that may be loaded at run time). Then run it with `--report FILE.md`, also with `--shot` or `--events`.
+Whichever way the program ends (normal exit, closed window, missing function, unhandled exception or crash), the report
+shows:
+
+- why it ended, with the registers on a crash;
+- the missing imports, marking the one that was called;
+- files not found, `GetProcAddress` and `LoadLibrary` failures, unsupported features (such as MCI commands), message
+  boxes and exceptions, each counted once;
+- how many times each API function was called, and the last 64 calls with their arguments.
+
+`WINLAYER_REPORT=FILE.md` does the same as `--report`.
 
 | Variable | Effect |
 |---|---|

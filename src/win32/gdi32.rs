@@ -68,8 +68,8 @@ pub fn resolve(name: &str) -> Option<usize> {
         CreateBrushIndirect, GetTextFaceA, CreatePenIndirect, CreatePatternBrush, GetBkColor, StretchDIBits, CreateDIBitmap, SaveDC, RestoreDC, SetViewportOrgEx, SetViewportExtEx,
         SetWindowExtEx, ScaleViewportExtEx, ScaleWindowExtEx, OffsetViewportOrgEx, PtVisible,
         ExtTextOutA, GetTextExtentPointA, SetTextAlign, GetTextAlign, CreateFontA, GetCurrentPositionEx,
-        GetTextExtentExPointA, SetTextCharacterExtra,
-        CreatePalette, SelectPalette, RealizePalette, GetPaletteEntries, SetPaletteEntries, ResizePalette,
+        GetTextExtentExPointA, SetTextCharacterExtra, CreateDIBSection,
+        CreatePalette, SelectPalette, RealizePalette, GetPaletteEntries, GetNearestPaletteIndex, SetPaletteEntries, ResizePalette,
     )
 }
 
@@ -306,6 +306,21 @@ pub unsafe extern "stdcall" fn CreateBitmap(w: i32, h: i32, _planes: u32, bpp: u
         }
     }
     add(Obj::Bitmap { w, h, px })
+}
+
+/// The pixel memory is handed to the program, but drawing it with GDI shows the bitmap's own (black)
+/// pixels: the program's writes to the memory are not seen.
+#[allow(non_snake_case)]
+pub unsafe extern "stdcall" fn CreateDIBSection(_hdc: u32, bmi: *const u8, _usage: u32, bits: *mut u32, _section: u32, _off: u32) -> u32 {
+    let rd = |o: usize| i32::from_le_bytes(std::ptr::read_unaligned(bmi.add(o) as *const [u8; 4]));
+    let (w, h, bpp) = (rd(4).max(1), rd(8).abs().max(1), (rd(12) >> 16).max(1) as u32);
+    let stride = (w as u32 * bpp).div_ceil(32) * 4;
+    let mem = vec![0u8; (stride * h as u32) as usize].leak();
+    if !bits.is_null() {
+        *bits = mem.as_mut_ptr() as u32;
+    }
+    crate::diag::warn(format!("CreateDIBSection {w}x{h}x{bpp}: contents not shown"));
+    add(Obj::Bitmap { w, h, px: vec![0xFF00_0000; (w * h) as usize] })
 }
 
 #[allow(non_snake_case)]
@@ -1092,6 +1107,18 @@ pub unsafe extern "stdcall" fn GetPaletteEntries(pal: u32, start: u32, n: u32, o
         std::ptr::write_unaligned(out.add(i as usize), p[(start + i) as usize]);
     }
     count
+}
+
+/// Index of the palette entry closest to the COLORREF (squared RGB distance).
+#[allow(non_snake_case)]
+pub extern "stdcall" fn GetNearestPaletteIndex(pal: u32, color: u32) -> u32 {
+    let t = PALETTES.lock().unwrap();
+    let Some(p) = t.get(&pal) else { return 0xFFFF_FFFF }; // CLR_INVALID
+    let ch = |c: u32, s: u32| ((c >> s) & 0xFF) as i32;
+    // PALETTEENTRY: peRed, peGreen, peBlue, peFlags; COLORREF: 0x00BBGGRR (same byte order)
+    (0..p.len())
+        .min_by_key(|&i| (0..3).map(|k| (ch(p[i], k * 8) - ch(color, k * 8)).pow(2)).sum::<i32>())
+        .unwrap_or(0) as u32
 }
 
 #[allow(non_snake_case)]

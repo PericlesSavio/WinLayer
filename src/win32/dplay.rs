@@ -34,7 +34,7 @@ macro_rules! vtable {
 }
 
 pub fn resolve(name: &str) -> Option<usize> {
-    exports!(name, DirectPlayCreate, DirectPlayEnumerateA)
+    exports!(name, DirectPlayCreate, DirectPlayEnumerateA, DirectPlayLobbyCreateA)
 }
 
 /// Games link dplayx.dll by ordinal.
@@ -42,8 +42,18 @@ pub fn name_of(ordinal: u32) -> Option<&'static str> {
     match ordinal {
         1 => Some("DirectPlayCreate"),
         2 => Some("DirectPlayEnumerateA"),
+        4 => Some("DirectPlayLobbyCreateA"),
         _ => None,
     }
+}
+
+/// There is no lobby: the object is not created (as on a system without one installed).
+#[allow(non_snake_case)]
+unsafe extern "stdcall" fn DirectPlayLobbyCreateA(_guid: u32, out: *mut u32, _outer: u32, _data: u32, _size: u32) -> u32 {
+    if !out.is_null() {
+        *out = 0;
+    }
+    0x8877_005A // DPERR_UNAVAILABLE
 }
 
 /// No service provider exists, so the object is never created.

@@ -59,7 +59,7 @@ pub fn resolve(name: &str) -> Option<usize> {
         CreateEventA, CreateMutexA, SetEvent, ReleaseMutex, WaitForSingleObject,
         CreateThread, ExitThread, ResumeThread, GetThreadContext, GetCurrentThread,
         GetCurrentThreadId, GetCurrentProcessId, TlsAlloc, TlsFree, TlsGetValue, TlsSetValue,
-        GetTickCount, ResetEvent, PulseEvent, WaitForMultipleObjects, SetThreadPriority, SuspendThread, SetPriorityClass,
+        GetTickCount, ResetEvent, PulseEvent, WaitForMultipleObjects, SetThreadPriority, GetThreadPriority, SuspendThread, SetPriorityClass,
         QueryPerformanceCounter, QueryPerformanceFrequency,
     )
 }
@@ -183,26 +183,40 @@ fn finish_current(code: u32) {
 
 #[allow(non_snake_case)]
 extern "stdcall" fn CreateThread(_attr: u32, _stack: u32, start: u32, param: u32, flags: u32, id_out: *mut u32) -> u32 {
-    let suspended = flags & CREATE_SUSPENDED != 0;
+    let h = spawn(start, param, flags & CREATE_SUSPENDED != 0, false);
+    if h != 0 && !id_out.is_null() { unsafe { *id_out = h } }
+    h
+}
+
+/// msvcrt `_beginthread`: the entry point is cdecl.
+pub fn create_thread(_stack: u32, start: u32, param: u32) -> u32 {
+    spawn(start, param, false, true)
+}
+
+pub fn exit_thread(code: u32) {
+    ExitThread(code)
+}
+
+fn spawn(start: u32, param: u32, suspended: bool, cdecl: bool) -> u32 {
     let h = add(Kind::Thread, State { suspended, ..Default::default() });
     let base = super::kernel32::image_base();
     let spawned = std::thread::Builder::new().spawn(move || {
-        if super::teb::install(base).is_err() { return }
+        if let Err(e) = super::teb::install(base) {
+            crate::diag::warn(format!("thread {start:#x}: TEB failed: {e:?}"));
+            return;
+        }
+        if std::env::var_os("WINLAYER_TRACE").is_some() { eprintln!("[winlayer] thread {start:#x} started") }
         CURRENT.with(|c| c.set(h));
         if let Some(o) = get(h) {
             let mut st = o.st.lock().unwrap();
             while st.suspended { st = o.cv.wait(st).unwrap() }
         }
-        let code = unsafe { super::call1(start, param) };
+        let code = unsafe {
+            if cdecl { super::call1_cdecl(start, param) } else { super::call1(start, param) }
+        };
         finish_current(code);
     });
-    match spawned {
-        Ok(_) => {
-            if !id_out.is_null() { unsafe { *id_out = h } }
-            h
-        }
-        Err(_) => 0,
-    }
+    if spawned.is_ok() { h } else { 0 }
 }
 
 #[allow(non_snake_case)]
@@ -334,6 +348,11 @@ unsafe extern "stdcall" fn WaitForMultipleObjects(n: u32, handles: *const u32, a
 #[allow(non_snake_case)]
 extern "stdcall" fn SetThreadPriority(_h: u32, _prio: i32) -> i32 {
     1
+}
+
+#[allow(non_snake_case)]
+extern "stdcall" fn GetThreadPriority(_h: u32) -> i32 {
+    0 // THREAD_PRIORITY_NORMAL
 }
 
 #[allow(non_snake_case)]

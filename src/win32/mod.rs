@@ -11,6 +11,8 @@ macro_rules! exports {
 }
 
 pub mod advapi32;
+pub mod avifil32;
+pub mod version;
 pub mod d3d;
 pub mod ddraw;
 pub mod dinput;
@@ -41,6 +43,12 @@ pub mod wsock32;
 /// Calls a stdcall function of the program with exactly 1 argument (thread start).
 pub unsafe fn call1(f: u32, a: u32) -> u32 {
     let f: extern "stdcall" fn(u32) -> u32 = std::mem::transmute(f as usize);
+    f(a)
+}
+
+/// ... a cdecl function with 1 argument.
+pub unsafe fn call1_cdecl(f: u32, a: u32) -> u32 {
+    let f: extern "C" fn(u32) -> u32 = std::mem::transmute(f as usize);
     f(a)
 }
 
@@ -99,6 +107,8 @@ pub fn resolve(dll: &str, name: &str) -> Option<usize> {
         "dplayx.dll" => dplay::resolve(name),
         "comdlg32.dll" => stubs::resolve_comdlg32(name),
         "msvfw32.dll" => stubs::resolve_msvfw32(name),
+        "avifil32.dll" => avifil32::resolve_avifil32(name),
+        "version.dll" => version::resolve(name),
         _ => None,
     }
 }

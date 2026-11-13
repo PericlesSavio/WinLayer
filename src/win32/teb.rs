@@ -3,6 +3,7 @@
 //! point to a valid structure. We use a TLS entry in the GDT.
 
 use std::ffi::{c_long, c_void};
+use std::sync::atomic::{AtomicU32, Ordering};
 
 const SYS_SET_THREAD_AREA: c_long = 243; // i386
 
@@ -29,6 +30,11 @@ const TEB_TID: usize = 0x24;
 const TEB_PEB: usize = 0x30;
 const PEB_IMAGE_BASE: usize = 0x08;
 
+/// GDT entry of `fs`. The kernel keeps 3 TLS entries per thread, copied from the creating thread:
+/// asking for a free one in every thread runs out at the second level of threads (a thread created
+/// by a thread). Every thread uses the same entry number, each with its own TEB.
+static FS_ENTRY: AtomicU32 = AtomicU32::new(u32::MAX);
+
 fn put(buf: &mut [u8], off: usize, v: u32) {
     buf[off..off + 4].copy_from_slice(&v.to_le_bytes());
 }
@@ -52,7 +58,7 @@ pub fn install(image_base: u32) -> Result<(), &'static str> {
     put(teb, TEB_PEB, peb.as_ptr() as usize as u32);
 
     let mut desc = UserDesc {
-        entry_number: u32::MAX, // the kernel picks a free entry
+        entry_number: FS_ENTRY.load(Ordering::Relaxed), // the first time, the kernel picks a free entry
         base_addr: teb.as_ptr() as usize as u32,
         limit: 0xFFF,
         // seg_32bit(1) | useable(1<<6); data, read/write, limit in bytes
@@ -62,6 +68,7 @@ pub fn install(image_base: u32) -> Result<(), &'static str> {
     if unsafe { syscall(SYS_SET_THREAD_AREA, &mut desc as *mut UserDesc as *mut c_void) } != 0 {
         return Err("set_thread_area failed");
     }
+    FS_ENTRY.store(desc.entry_number, Ordering::Relaxed);
     let selector = (desc.entry_number << 3) | 3; // RPL 3, GDT table
     // SAFETY: the selector was just created and is valid for data.
     unsafe { core::arch::asm!("mov fs, {0:x}", in(reg) selector, options(nostack, preserves_flags)) };

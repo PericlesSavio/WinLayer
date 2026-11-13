@@ -429,6 +429,7 @@ pub fn start() -> Result<(), String> {
         if let Err(e) = run(c, keymap, win, gc, depth, wm_delete, w, h) {
             eprintln!("[winlayer] X11: {e}");
         }
+        crate::diag::set_end("window closed");
         std::process::exit(0); // window closed or connection lost
     });
     Ok(())

@@ -109,6 +109,14 @@ extern "C" fn on_fault(sig: i32, info: *const u8, uctx: *const u32) {
             eprintln!("  [{nome}={:#x}] {} |{txt}|", v & !0xF, hex.join(""));
         }
     }
+    crate::diag::note(
+        crate::diag::Kind::Crash,
+        format!(
+            "signal {sig} at EIP={:#010x}, address={fault:#010x}\nEAX={:08x} EBX={:08x} ECX={:08x} EDX={:08x} ESI={:08x} EDI={:08x} EBP={:08x} ESP={:08x}",
+            g[14], g[11], g[8], g[10], g[9], g[5], g[4], g[6], g[7]
+        ),
+    );
+    crate::diag::set_end(format!("crash (signal {sig} at EIP={:#010x})", g[14]));
     std::process::exit(139);
 }
 
